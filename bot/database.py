@@ -65,7 +65,32 @@ class Database:
                 ON group_members (chat_id);
                 """
             )
+            # 3. chat_settings: per-chat options (image theme)
+            await cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS chat_settings (
+                    chat_id INTEGER PRIMARY KEY,
+                    theme TEXT NOT NULL DEFAULT 'default'
+                );
+                """
+            )
             await self._conn.commit()
+
+    async def get_chat_theme(self, chat_id: int) -> str:
+        """Theme key chosen for a chat ('default' if never set)."""
+        assert self._conn is not None
+        async with self._conn.execute("SELECT theme FROM chat_settings WHERE chat_id = ?;", (chat_id,)) as cur:
+            row = await cur.fetchone()
+            return row["theme"] if row else "default"
+
+    async def set_chat_theme(self, chat_id: int, theme: str) -> None:
+        assert self._conn is not None
+        await self._conn.execute(
+            "INSERT INTO chat_settings (chat_id, theme) VALUES (?, ?) "
+            "ON CONFLICT(chat_id) DO UPDATE SET theme = excluded.theme;",
+            (chat_id, theme),
+        )
+        await self._conn.commit()
 
     async def register_user(self, tg_id: int, tg_name: str, lastfm_user: str) -> None:
         """

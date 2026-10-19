@@ -13,17 +13,13 @@ from PIL import Image, ImageDraw, ImageEnhance, ImageFilter
 
 from bot import fonts
 from bot.collage import _dominant
+from bot import decor
 from bot.stats import ListeningStats
+from bot.themes import DEFAULT, Theme
 
 K = 1.5  # render scale (keeps width+height under Telegram's 10000px photo limit)
 W = 1080
 PAD = 48
-
-BG = (11, 9, 20)
-INK = (255, 255, 255)
-MUTED = (178, 174, 200)
-CARD = (27, 23, 46)
-LINE = (52, 46, 80)
 
 DEFAULT_PALETTE = [(255, 61, 129), (255, 214, 10), (0, 229, 255), (150, 100, 255)]
 
@@ -42,7 +38,9 @@ def _open(cover: Optional[bytes]) -> Optional[Image.Image]:
         return None
 
 
-def _palette(covers: Sequence[Optional[bytes]]) -> List[Tuple[int, int, int]]:
+def _palette(covers: Sequence[Optional[bytes]], theme: Theme = DEFAULT) -> List[Tuple[int, int, int]]:
+    if theme.palette:
+        return list(theme.palette)
     cols: List[Tuple[int, int, int]] = []
     for c in covers:
         im = _open(c)
@@ -63,16 +61,17 @@ def _palette(covers: Sequence[Optional[bytes]]) -> List[Tuple[int, int, int]]:
 class Sheet:
     """Logical-coordinate drawing surface (all args in 1080-wide units)."""
 
-    def __init__(self, height: int, palette: Sequence[Tuple[int, int, int]]):
+    def __init__(self, height: int, palette: Sequence[Tuple[int, int, int]], theme: Theme = DEFAULT):
         self.h = height
+        self.t = theme
         self.pal = list(palette)
         self.img = self._background(height)
         self.d = ImageDraw.Draw(self.img)
 
     def _background(self, height: int) -> Image.Image:
         w, h = int(W * K), int(height * K)
-        base = Image.new("RGB", (w, h), BG)
-        glow = Image.new("RGB", (w, h), BG)
+        base = Image.new("RGB", (w, h), self.t.bg)
+        glow = Image.new("RGB", (w, h), self.t.bg)
         gd = ImageDraw.Draw(glow)
         step = int(1000 * K)
         for i, y in enumerate(range(int(500 * K), h + step, step)):
@@ -81,7 +80,13 @@ class Sheet:
             r = int(520 * K)
             gd.ellipse([x - r, y - r, x + r, y + r], fill=col)
         glow = glow.filter(ImageFilter.GaussianBlur(int(230 * K)))
-        return Image.blend(base, glow, 0.30)
+        out = Image.blend(base, glow, 0.30)
+        if self.t.themed:
+            decor.scatter(out, self.t, (0, 0, w, h), count=max(6, int(height / 170)), seed=7,
+                          size=(int(110 * K), int(190 * K)), alpha=0.35)
+            if "snowflake" in self.t.stickers:
+                decor.snow(out, (0, 0, w, h), count=int(height / 12), seed=3, radius=(int(2 * K), int(6 * K)))
+        return out
 
     # primitives -----------------------------------------------------------
     def _b(self, x0, y0, x1, y1):
@@ -110,9 +115,10 @@ class Sheet:
     def measure(self, s: str, size: float, weight=fonts.BOLD) -> float:
         return fonts.font(max(8, int(size * K)), weight).getlength(s) / K
 
-    def text(self, x, y, s, size, fill=INK, weight=fonts.BOLD, align="l", max_w=None) -> float:
+    def text(self, x, y, s, size, fill=None, weight=fonts.BOLD, align="l", max_w=None) -> float:
         """Draw text with vertical centre at y. Returns drawn width (logical)."""
         s = str(s)
+        fill = fill or self.t.ink
         if max_w and self.measure(s, size, weight) > max_w:
             while s and self.measure(s + "…", size, weight) > max_w:
                 s = s[:-1]
@@ -125,8 +131,8 @@ class Sheet:
         self.d.text((x * K, y * K), s, font=fonts.font(max(8, int(size * K)), weight), fill=fill, anchor="lm")
         return w
 
-    def label(self, x, y, s, fill=MUTED, align="l", size=24):
-        return self.text(x, y, s.upper(), size, fill, fonts.SEMIBOLD, align)
+    def label(self, x, y, s, fill=None, align="l", size=24):
+        return self.text(x, y, s.upper(), size, fill or self.t.muted, fonts.SEMIBOLD, align)
 
     def export(self, quality=92) -> io.BytesIO:
         buf = io.BytesIO()
@@ -140,7 +146,7 @@ def _hero(sh: Sheet, covers: Sequence[Optional[bytes]], title: str, subtitle: st
     """Full-bleed cover mosaic with huge title over a dark gradient."""
     imgs = [i for i in (_open(c) for c in covers) if i]
     hw, hh = int(W * K), int(h * K)
-    hero = Image.new("RGB", (hw, hh), (20, 16, 36))
+    hero = Image.new("RGB", (hw, hh), sh.t.card)
     if imgs:
         cols = 4 if len(imgs) >= 8 else 3 if len(imgs) >= 4 else 2
         tile = math.ceil(hw / cols)
@@ -159,8 +165,13 @@ def _hero(sh: Sheet, covers: Sequence[Optional[bytes]], title: str, subtitle: st
     gd = ImageDraw.Draw(grad)
     for y in range(hh):
         p = y / hh
-        gd.line([(0, y), (hw, y)], fill=(11, 9, 20, int(250 * p ** 1.1 + 40 * (1 - p))))
+        gd.line([(0, y), (hw, y)], fill=sh.t.bg + (int(250 * p ** 1.1 + 40 * (1 - p)),))
     hero = Image.alpha_composite(hero.convert("RGBA"), grad).convert("RGB")
+    if sh.t.themed:
+        decor.scatter(hero, sh.t, (int(hw * 0.35), int(hh * 0.12), hw - int(60 * K), int(hh * 0.62)), count=4,
+                      seed=11, size=(int(90 * K), int(140 * K)))
+        if "snowflake" in sh.t.stickers:
+            decor.snow(hero, (0, 0, hw, hh), count=40, seed=5, radius=(int(2 * K), int(6 * K)))
     sh.img.paste(hero, (0, 0))
     sh.d = ImageDraw.Draw(sh.img)
 
@@ -169,12 +180,12 @@ def _hero(sh: Sheet, covers: Sequence[Optional[bytes]], title: str, subtitle: st
     tw = sh.measure(tag.upper(), 26, fonts.EXTRABOLD)
     sh.rrect(PAD, 44, PAD + tw + 48, 100, 28, fill=acc)
     sh.text(PAD + 24, 72, tag.upper(), 26, (12, 12, 16), fonts.EXTRABOLD)
-    sh.text(W - PAD, 72, "LadsJam", 30, INK, fonts.BLACK, align="r")
+    sh.text(W - PAD, 72, "LadsJam", 30, sh.t.ink, fonts.BLACK, align="r")
 
     size = 96
     while size > 48 and sh.measure(title, size, fonts.BLACK) > W - 2 * PAD:
         size -= 4
-    sh.text(PAD, h - 108, title, size, INK, fonts.BLACK, max_w=W - 2 * PAD)
+    sh.text(PAD, h - 108, title, size, sh.t.ink, fonts.BLACK, max_w=W - 2 * PAD)
     sh.text(PAD, h - 48, subtitle, 34, sh.pal[1], fonts.BOLD, max_w=W - 2 * PAD)
     return h + 36
 
@@ -183,16 +194,16 @@ def _section(sh: Sheet, y: int, num: str, title: str, note: str = "") -> int:
     col = sh.pal[(int(num) - 1) % len(sh.pal)] if num.isdigit() else sh.pal[0]
     sh.rrect(PAD, y, PAD + 72, y + 56, 28, fill=col)
     sh.text(PAD + 36, y + 28, num, 28, (12, 12, 16), fonts.BLACK, align="m")
-    sh.text(PAD + 92, y + 28, title.upper(), 38, INK, fonts.BLACK)
+    sh.text(PAD + 92, y + 28, title.upper(), 38, sh.t.ink, fonts.BLACK)
     if note:
-        sh.text(W - PAD, y + 28, note, 26, MUTED, fonts.SEMIBOLD, align="r")
+        sh.text(W - PAD, y + 28, note, 26, sh.t.muted, fonts.SEMIBOLD, align="r")
     return y + 88
 
 
 def _footer(sh: Sheet, y: int, extra: str = "") -> None:
-    sh.text(PAD, y + 30, "LadsJam · Last.fm", 26, MUTED, fonts.BOLD)
+    sh.text(PAD, y + 30, f"LadsJam · {sh.t.footer}", 26, sh.t.muted, fonts.BOLD)
     if extra:
-        sh.text(W - PAD, y + 30, extra, 26, MUTED, fonts.BOLD, align="r")
+        sh.text(W - PAD, y + 30, extra, 26, sh.t.muted, fonts.BOLD, align="r")
 
 
 def _kpis(sh: Sheet, y: int, items: Sequence[Tuple[str, str]]) -> int:
@@ -220,7 +231,7 @@ def _kpis(sh: Sheet, y: int, items: Sequence[Tuple[str, str]]) -> int:
 def _bars(sh: Sheet, y: int, h: int, values: Sequence[int], labels: Sequence[str],
           show_values: bool, label_every: int = 1, *, x0: float = PAD,
           x1: float = W - PAD, label_size: int = 24) -> int:
-    sh.rrect(x0 - 12, y, x1 + 12, y + h, 36, fill=CARD)
+    sh.rrect(x0 - 12, y, x1 + 12, y + h, 36, fill=sh.t.card)
     top, bottom = y + 60, y + h - 56
     vmax = max(max(values, default=0), 1)
     n = max(1, len(values))
@@ -234,11 +245,11 @@ def _bars(sh: Sheet, y: int, h: int, values: Sequence[int], labels: Sequence[str
             col = sh.pal[1] if i == imax else sh.pal[0]
             sh.rrect(cx - bw / 2, bottom - bh, cx + bw / 2, bottom, min(10, bw / 2), fill=col)
             if show_values:
-                sh.text(cx, bottom - bh - 20, v, 24, INK, fonts.BOLD, align="m")
+                sh.text(cx, bottom - bh - 20, v, 24, sh.t.ink, fonts.BOLD, align="m")
         else:
-            sh.rrect(cx - bw / 2, bottom - 6, cx + bw / 2, bottom, 3, fill=LINE)
+            sh.rrect(cx - bw / 2, bottom - 6, cx + bw / 2, bottom, 3, fill=sh.t.line)
         if i % label_every == 0:
-            sh.text(cx, bottom + 30, labels[i], label_size, MUTED, fonts.SEMIBOLD, align="m")
+            sh.text(cx, bottom + 30, labels[i], label_size, sh.t.muted, fonts.SEMIBOLD, align="m")
     return y + h
 
 
@@ -247,7 +258,7 @@ def _rank_list(sh: Sheet, y: int, rows: Sequence[Row], unit: str = "") -> int:
     for i, (label, sub, val) in enumerate(rows):
         row_h = 128 if sub else 108
         col = sh.pal[i % len(sh.pal)]
-        sh.rrect(PAD - 12, y, W - PAD + 12, y + row_h - 14, 30, fill=CARD)
+        sh.rrect(PAD - 12, y, W - PAD + 12, y + row_h - 14, 30, fill=sh.t.card)
         # proportional fill strip along the bottom
         bw = int((W - 2 * PAD - 24) * val / vmax)
         sh.rrect(PAD, y + row_h - 26, PAD + max(bw, 12), y + row_h - 20, 3, fill=col)
@@ -259,10 +270,10 @@ def _rank_list(sh: Sheet, y: int, rows: Sequence[Row], unit: str = "") -> int:
         vw = sh.measure(vtxt, 36, fonts.BLACK)
         maxw = W - PAD - tx - vw - 28
         if sub:
-            sh.text(tx, cy - 20, label, 36, INK, fonts.EXTRABOLD, max_w=maxw)
-            sh.text(tx, cy + 22, sub, 28, MUTED, fonts.SEMIBOLD, max_w=maxw)
+            sh.text(tx, cy - 20, label, 36, sh.t.ink, fonts.EXTRABOLD, max_w=maxw)
+            sh.text(tx, cy + 22, sub, 28, sh.t.muted, fonts.SEMIBOLD, max_w=maxw)
         else:
-            sh.text(tx, cy, label, 36, INK, fonts.EXTRABOLD, max_w=maxw)
+            sh.text(tx, cy, label, 36, sh.t.ink, fonts.EXTRABOLD, max_w=maxw)
         sh.text(W - PAD - 12, cy, vtxt, 36, col, fonts.BLACK, align="r")
         y += row_h
     return y
@@ -281,11 +292,11 @@ def _rows_h(n: int, sub: bool) -> int:
 def _stats_ranking(sh: Sheet, x: int, y: int, width: int, title: str, rows: Sequence[Row]) -> int:
     """Half-width ranking panel for the compact listening report."""
     height = 80 + max(len(rows), 1) * 92 + 16
-    sh.rrect(x, y, x + width, y + height, 28, fill=CARD)
-    sh.text(x + 24, y + 38, title, 28, INK, fonts.BLACK, max_w=width - 48)
+    sh.rrect(x, y, x + width, y + height, 28, fill=sh.t.card)
+    sh.text(x + 24, y + 38, title, 28, sh.t.ink, fonts.BLACK, max_w=width - 48)
     vmax = max((row[2] for row in rows), default=1) or 1
     if not rows:
-        sh.text(x + 24, y + 112, "Пока нет данных", 26, MUTED)
+        sh.text(x + 24, y + 112, "Пока нет данных", 26, sh.t.muted)
     for i, (label, sub, val) in enumerate(rows):
         ry = y + 80 + i * 92
         col = sh.pal[i % len(sh.pal)]
@@ -293,21 +304,21 @@ def _stats_ranking(sh: Sheet, x: int, y: int, width: int, title: str, rows: Sequ
         value = f"{val:,}".replace(",", " ")
         vw = sh.measure(value, 28, fonts.BLACK)
         sh.text(x + width - 24, ry + 25, value, 28, col, fonts.BLACK, align="r")
-        sh.text(x + 58, ry + 25, label, 28, INK, fonts.EXTRABOLD, max_w=width - 106 - vw)
+        sh.text(x + 58, ry + 25, label, 28, sh.t.ink, fonts.EXTRABOLD, max_w=width - 106 - vw)
         if sub:
-            sh.text(x + 58, ry + 55, sub, 23, MUTED, fonts.SEMIBOLD, max_w=width - 82)
+            sh.text(x + 58, ry + 55, sub, 23, sh.t.muted, fonts.SEMIBOLD, max_w=width - 82)
         bw = max(6, (width - 82) * val / vmax)
         sh.rrect(x + 58, ry + 74, x + 58 + bw, ry + 79, 2, fill=col)
     return y + height
 
 
-def render_stats(st: ListeningStats, covers: Sequence[Optional[bytes]] = ()) -> io.BytesIO:
+def render_stats(st: ListeningStats, covers: Sequence[Optional[bytes]] = (), theme: Theme = DEFAULT) -> io.BytesIO:
     hero_h = 280
     charts_y = hero_h + 36 + 20 + 2 * 210 + 24
     ranks_y = charts_y + 390
     rank_h = 80 + max(len(st.top_artists), len(st.top_tracks), 1) * 92 + 16
     height = ranks_y + rank_h + 100
-    sh = Sheet(height, _palette(covers))
+    sh = Sheet(height, _palette(covers, theme), theme)
     y = _hero(sh, covers, st.name.upper(), f"последние {st.days} дн.", "listening report", hero_h)
     _kpis(
         sh, y + 20,
@@ -322,18 +333,18 @@ def render_stats(st: ListeningStats, covers: Sequence[Optional[bytes]] = ()) -> 
     gap = 32
     panel_w = (W - 2 * PAD - gap) // 2
     right_x = PAD + panel_w + gap
-    sh.text(PAD, charts_y + 20, "ПО ДНЯМ", 30, INK, fonts.BLACK)
-    sh.text(right_x, charts_y + 20, "ПО ЧАСАМ", 30, INK, fonts.BLACK)
+    sh.text(PAD, charts_y + 20, "ПО ДНЯМ", 30, sh.t.ink, fonts.BLACK)
+    sh.text(right_x, charts_y + 20, "ПО ЧАСАМ", 30, sh.t.ink, fonts.BLACK)
     n = len(st.per_day)
     _bars(sh, charts_y + 60, 270, [v for _, v in st.per_day], [l for l, _ in st.per_day],
           show_values=n <= 7, label_every=max(1, math.ceil(n / 5)),
           x0=PAD, x1=PAD + panel_w, label_size=20)
     _bars(sh, charts_y + 60, 270, st.per_hour, [f"{h:02d}" for h in range(24)], False, 4,
           x0=right_x, x1=W - PAD, label_size=20)
-    sh.text(PAD, charts_y + 354, f"Рекорд: {st.best_day[1]} · {st.best_day[0]}", 23, MUTED,
+    sh.text(PAD, charts_y + 354, f"Рекорд: {st.best_day[1]} · {st.best_day[0]}", 23, sh.t.muted,
             max_w=panel_w)
     peak = max(range(24), key=lambda h: st.per_hour[h]) if st.total else 0
-    sh.text(right_x, charts_y + 354, f"Пик активности: {peak:02d}:00", 23, MUTED)
+    sh.text(right_x, charts_y + 354, f"Пик активности: {peak:02d}:00", 23, sh.t.muted)
     _stats_ranking(sh, PAD, ranks_y, panel_w, "ТОП АРТИСТОВ", st.top_artists)
     _stats_ranking(sh, right_x, ranks_y, panel_w, "ТОП ТРЕКОВ", st.top_tracks)
     _footer(sh, ranks_y + rank_h + 24, "выборка ограничена" if st.truncated else "")
@@ -341,12 +352,12 @@ def render_stats(st: ListeningStats, covers: Sequence[Optional[bytes]] = ()) -> 
 
 
 def render_rows(title: str, subtitle: str, rows: Sequence[Row], unit_note: str = "", tag: str = "chart",
-                covers: Sequence[Optional[bytes]] = ()) -> io.BytesIO:
+                covers: Sequence[Optional[bytes]] = (), theme: Theme = DEFAULT) -> io.BytesIO:
     rows = list(rows)[:15]
     has_sub = any(r[1] for r in rows)
     hero_h = 460
     height = hero_h + 36 + 20 + 88 + _rows_h(len(rows), has_sub) + 100
-    sh = Sheet(height, _palette(covers))
+    sh = Sheet(height, _palette(covers, theme), theme)
     y = _hero(sh, covers, title, subtitle, tag, hero_h)
     y = _section(sh, y + 20, "1", unit_note or "рейтинг")
     y = _rank_list(sh, y, rows)
@@ -355,7 +366,7 @@ def render_rows(title: str, subtitle: str, rows: Sequence[Row], unit_note: str =
 
 
 def render_album_grid(
-    title: str, subtitle: str, items: Sequence[dict], covers: Sequence[Optional[bytes]]
+    title: str, subtitle: str, items: Sequence[dict], covers: Sequence[Optional[bytes]], theme: Theme = DEFAULT
 ) -> io.BytesIO:
     items = list(items)[:9]
     covers = list(covers)
@@ -369,14 +380,14 @@ def render_album_grid(
     cell_h = size + cap_h
     hero_h = 280
     height = hero_h + 36 + 20 + rows * cell_h + 100
-    sh = Sheet(height, _palette(covers))
+    sh = Sheet(height, _palette(covers, theme), theme)
     y0 = _hero(sh, covers, title, subtitle, "top albums", hero_h) + 20
     for i, it in enumerate(items):
         r, c = divmod(i, cols)
         x = grid_x + c * (size + gap)
         y = y0 + r * cell_h
         col = sh.pal[i % len(sh.pal)]
-        im = _open(covers[i] if i < len(covers) else None) or Image.new("RGB", (size, size), CARD)
+        im = _open(covers[i] if i < len(covers) else None) or Image.new("RGB", (size, size), sh.t.card)
         sh.paste(im, x, y, size=size, radius=32)
         sh.rrect(x + 16, y + 16, x + 16 + 76, y + 16 + 76, 38, fill=col)
         sh.text(x + 54, y + 54, f"{i + 1}", 36, (12, 12, 16), fonts.BLACK, align="m")
@@ -384,19 +395,19 @@ def render_album_grid(
         pw = sh.measure(pl, 30, fonts.BLACK) + 40
         sh.rrect(x + size - 16 - pw, y + size - 76, x + size - 16, y + size - 16, 30, fill=(12, 12, 16))
         sh.text(x + size - 16 - pw / 2, y + size - 46, pl, 30, col, fonts.BLACK, align="m")
-        sh.text(x + 4, y + size + 30, it["name"], 28, INK, fonts.EXTRABOLD, max_w=size - 8)
-        sh.text(x + 4, y + size + 66, it["artist"], 24, MUTED, fonts.SEMIBOLD, max_w=size - 8)
+        sh.text(x + 4, y + size + 30, it["name"], 28, sh.t.ink, fonts.EXTRABOLD, max_w=size - 8)
+        sh.text(x + 4, y + size + 66, it["artist"], 24, sh.t.muted, fonts.SEMIBOLD, max_w=size - 8)
     _footer(sh, y0 + rows * cell_h + 10)
     return sh.export()
 
 
 def render_versus(
     name_a: str, name_b: str, subtitle: str, metrics: Sequence[Tuple[str, int, int]],
-    covers: Sequence[Optional[bytes]] = (),
+    covers: Sequence[Optional[bytes]] = (), theme: Theme = DEFAULT,
 ) -> io.BytesIO:
     hero_h = 460
     height = hero_h + 36 + 20 + 190 * len(metrics) + 110
-    sh = Sheet(height, _palette(covers))
+    sh = Sheet(height, _palette(covers, theme), theme)
     y = _hero(sh, covers, f"{name_a} vs {name_b}", subtitle, "versus", hero_h) + 20
     wins_a = sum(1 for _, a, b in metrics if a > b)
     wins_b = sum(1 for _, a, b in metrics if b > a)
@@ -404,8 +415,8 @@ def render_versus(
     half = cx - PAD
     ca, cb = sh.pal[0], sh.pal[2]
     for label, a, b in metrics:
-        sh.rrect(PAD - 12, y, W - PAD + 12, y + 172, 34, fill=CARD)
-        sh.label(cx, y + 34, label, MUTED, align="m", size=26)
+        sh.rrect(PAD - 12, y, W - PAD + 12, y + 172, 34, fill=sh.t.card)
+        sh.label(cx, y + 34, label, sh.t.muted, align="m", size=26)
         m = max(a, b, 1)
         by = y + 118
         wa, wb = int((half - 150) * a / m), int((half - 150) * b / m)

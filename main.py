@@ -9,7 +9,7 @@ from aiogram.types import BotCommand
 
 from bot.config import config, validate_config
 from bot.database import Database
-from bot.handlers import group_router, private_router, stats_router
+from bot.handlers import group_router, private_router, stats_router, themes_router
 from bot.lastfm import LastFMClient
 from bot.middlewares import GroupMemberTrackerMiddleware
 
@@ -63,6 +63,7 @@ async def main() -> None:
 
     # Register Routers
     dp.include_router(stats_router)
+    dp.include_router(themes_router)
     dp.include_router(private_router)
     dp.include_router(group_router)
 
@@ -82,6 +83,7 @@ async def main() -> None:
                 BotCommand(command="leaders", description="Лидеры группы по количеству прослушиваний"),
                 BotCommand(command="compat", description="Музыкальная совместимость"),
                 BotCommand(command="whoknows", description="Кто в группе слушает артиста"),
+                BotCommand(command="themes", description="Тема оформления картинок (Хэллоуин, Новый год…)"),
                 BotCommand(command="join", description="Привязаться к группе"),
                 BotCommand(command="help", description="Справка"),
             ]

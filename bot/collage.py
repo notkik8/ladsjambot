@@ -7,7 +7,9 @@ from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 from bot import fonts as _mw
 from bot.fonts import font as _mfont
+from bot import decor
 from bot.lastfm import TrackInfo
+from bot.themes import DEFAULT, Theme
 
 logger = logging.getLogger(__name__)
 
@@ -260,6 +262,7 @@ def _draw_card_banner(
     size: int,
     banner_height: int,
     accent: Tuple[int, int, int] = (255, 90, 60),
+    theme: Theme = DEFAULT,
 ) -> None:
     """Big, heavy type over a strong gradient + colourful listener chip (phone-first sizes)."""
     banner_height = int(banner_height * 1.25)
@@ -267,7 +270,7 @@ def _draw_card_banner(
     d_grad = ImageDraw.Draw(grad)
     for y in range(banner_height):
         progress = y / float(banner_height)
-        d_grad.line([(0, y), (size, y)], fill=(4, 4, 8, int(245 * (progress ** 1.25))))
+        d_grad.line([(0, y), (size, y)], fill=theme.bg + (int(245 * (progress ** 1.25)),))
     card.paste(grad, (0, size - banner_height), grad)
 
     pad = int(size * 0.05)
@@ -277,7 +280,7 @@ def _draw_card_banner(
     # listener chip (top-left): accent-coloured, dark bold text
     f_user = _mfont(int(size * 0.052), _mw.EXTRABOLD)
     chip_h = int(size * 0.1)
-    name = _fit_hybrid_text(tg_name, f_user, f_user, size - pad * 3)
+    name = _fit_hybrid_text(tg_name, f_user, f_user, size - pad * 3 - (int(size * 0.2) if theme.themed else 0))
     tw = f_user.getlength(name)
     chip_w = int(tw + chip_h * 0.9)
     draw.rounded_rectangle([(pad, pad), (pad + chip_w, pad + chip_h)], radius=chip_h // 2, fill=accent + (255,))
@@ -327,7 +330,8 @@ def _build_background(items: List[TrackInfo], width: int, height: int) -> Image.
     return Image.new("RGBA", (width, height), BG_COLOR)
 
 
-def _render_single_card(item: TrackInfo, card_size: int, radius: int, banner_h: int) -> Image.Image:
+def _render_single_card(item: TrackInfo, card_size: int, radius: int, banner_h: int,
+                        theme: Theme = DEFAULT, idx: int = 0) -> Image.Image:
     """Build a complete individual song card with cover, banner, rounded corners, and border."""
     card: Optional[Image.Image] = None
 
@@ -348,8 +352,12 @@ def _render_single_card(item: TrackInfo, card_size: int, radius: int, banner_h: 
     if card is None:
         card = _create_placeholder(card_size)
 
-    accent = _dominant(card)
-    _draw_card_banner(card, item.tg_name, item.track, item.artist, card_size, banner_h, accent)
+    accent = theme.palette[idx % len(theme.palette)] if theme.palette else _dominant(card)
+    _draw_card_banner(card, item.tg_name, item.track, item.artist, card_size, banner_h, accent, theme)
+    if theme.themed:
+        kind = theme.stickers[idx % len(theme.stickers)]
+        px = int(card_size * 0.17)
+        decor.place(card, theme, kind, card_size - px * 0.75, px * 0.75, px, angle=(-14, 12, -8, 16)[idx % 4])
 
     # Clip with rounded corners
     card = _round_corners(card, radius)
@@ -360,15 +368,15 @@ def _render_single_card(item: TrackInfo, card_size: int, radius: int, banner_h: 
     b_draw.rounded_rectangle(
         [(0, 0), (card_size - 1, card_size - 1)],
         radius=radius,
-        outline=(255, 255, 255, 40),
-        width=2,
+        outline=accent + (200,) if theme.themed else (255, 255, 255, 40),
+        width=4 if theme.themed else 2,
     )
     card.paste(border, (0, 0), border)
 
     return card
 
 
-def build_collage(items: List[TrackInfo], cell_size: int = CELL_SIZE) -> io.BytesIO:
+def build_collage(items: List[TrackInfo], cell_size: int = CELL_SIZE, theme: Theme = DEFAULT) -> io.BytesIO:
     """
     Synchronous image rendering function to be run via asyncio.to_thread().
     Calculates dynamic grid layout:
@@ -400,7 +408,7 @@ def build_collage(items: List[TrackInfo], cell_size: int = CELL_SIZE) -> io.Byte
     canvas_height = rows * cell_size
 
     # Initialize canvas with deep obsidian background
-    canvas = Image.new("RGBA", (canvas_width, canvas_height), BG_COLOR)
+    canvas = Image.new("RGBA", (canvas_width, canvas_height), theme.bg + (255,) if theme.themed else BG_COLOR)
 
     # Pre-render card drop shadow
     shadow_img, shadow_pad = _create_shadow(card_size, card_radius)
@@ -415,11 +423,15 @@ def build_collage(items: List[TrackInfo], cell_size: int = CELL_SIZE) -> io.Byte
         # Paste soft shadow beneath card
 
         if idx < n:
-            card_img = _render_single_card(items[idx], card_size, card_radius, banner_height)
+            card_img = _render_single_card(items[idx], card_size, card_radius, banner_height, theme, idx)
         else:
             card_img = _create_empty_slot(card_size, card_radius, items[(idx - n) % n])
 
         canvas.paste(card_img, (base_x, base_y), card_img)
+
+    if theme.themed and "snowflake" in theme.stickers:
+        decor.snow(canvas, (0, 0, canvas_width, canvas_height), count=cols * rows * 14, seed=9,
+                   radius=(max(2, cell_size // 200), max(5, cell_size // 70)))
 
     # Convert to RGB and export to BytesIO buffer
     output_buffer = io.BytesIO()

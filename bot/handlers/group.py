@@ -9,6 +9,7 @@ from bot.collage import build_collage
 from bot.database import Database
 from bot.formatting import now_playing_html_chunks, spotify_search_url, user_name, user_name_html
 from bot.lastfm import LastFMClient
+from bot.themes import for_chat
 
 logger = logging.getLogger(__name__)
 
@@ -125,7 +126,7 @@ async def cmd_now_playing(
 
     # 3. Non-blocking image generation in thread pool
     try:
-        collage_buf = await asyncio.to_thread(build_collage, active_tracks)
+        collage_buf = await asyncio.to_thread(build_collage, active_tracks, theme=await for_chat(db, chat_id))
     except Exception as e:
         logger.error("Failed to generate collage: %s", e)
         await message.answer("⚠️ Произошла ошибка при генерации коллажа.")

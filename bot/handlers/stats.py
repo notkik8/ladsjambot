@@ -14,6 +14,7 @@ from bot.database import Database
 from bot.formatting import user_name_html
 from bot.infographic import render_album_grid, render_rows, render_stats, render_versus
 from bot.lastfm import LastFMClient
+from bot.themes import for_chat
 
 logger = logging.getLogger(__name__)
 
@@ -99,7 +100,7 @@ async def cmd_stats(message: Message, command: CommandObject, db: Database, last
 
     data = st.build_stats(user["tg_name"], days, scrobbles, truncated)
     covers = await _hero_covers(lastfm, user["lastfm_user"], "7day" if days <= 7 else "1month")
-    buf = await asyncio.to_thread(render_stats, data, covers)
+    buf = await asyncio.to_thread(render_stats, data, covers, await for_chat(db, message.chat.id))
     await _send_photo(message, buf, name="listening_stats.jpg")
 
 
@@ -126,14 +127,16 @@ async def cmd_top(message: Message, command: CommandObject, db: Database, lastfm
     subtitle = f"{user['tg_name']}  ·  {period_label}"
     if kind == "albums":
         covers = await asyncio.gather(*[lastfm._download_cover(i["cover"]) for i in items])
-        buf = await asyncio.to_thread(render_album_grid, KIND_TITLES[kind], subtitle, items, covers)
+        buf = await asyncio.to_thread(render_album_grid, KIND_TITLES[kind], subtitle, items, covers,
+                                     await for_chat(db, message.chat.id))
     else:
         rows = [
             (i["name"], i["artist"] if kind == "tracks" else "", i["plays"]) for i in items
         ]
         covers = await _hero_covers(lastfm, user["lastfm_user"], period)
         buf = await asyncio.to_thread(
-            render_rows, KIND_TITLES[kind], subtitle, rows, unit_note="прослушивания", covers=covers
+            render_rows, KIND_TITLES[kind], subtitle, rows, unit_note="прослушивания", covers=covers,
+            theme=await for_chat(db, message.chat.id),
         )
     await _send_photo(message, buf, name="top.jpg")
 
@@ -163,7 +166,7 @@ async def cmd_leaders(message: Message, command: CommandObject, db: Database, la
         return
     buf = await asyncio.to_thread(
         render_rows, "LEADERBOARD", f"{message.chat.title or 'группа'}  ·  {days} дн.", rows,
-        unit_note="количество прослушиваний", tag="leaderboard",
+        unit_note="количество прослушиваний", tag="leaderboard", theme=await for_chat(db, message.chat.id),
     )
     await _send_photo(message, buf, name="leaders.jpg")
 
@@ -350,7 +353,8 @@ async def cmd_vs(message: Message, command: CommandObject, db: Database, lastfm:
     buf = await asyncio.to_thread(
         render_versus, me["tg_name"], other["tg_name"], f"последние {days} дн.", metrics,
         (await _hero_covers(lastfm, me["lastfm_user"], "1month", 6))
-        + (await _hero_covers(lastfm, other["lastfm_user"], "1month", 6))
+        + (await _hero_covers(lastfm, other["lastfm_user"], "1month", 6)),
+        await for_chat(db, message.chat.id),
     )
     await _send_photo(message, buf, name="versus.jpg")
 
@@ -391,7 +395,7 @@ async def cmd_genres(message: Message, command: CommandObject, db: Database, las
     rows = [(n.title(), "", max(1, round(100 * v / total))) for n, v in top]
     covers = await _hero_covers(lastfm, user["lastfm_user"], period)
     buf = await asyncio.to_thread(
-        render_rows, "ЖАНРЫ", f"{user['tg_name']}  ·  {label}", rows, unit_note="доля, %", tag="genres",
+        render_rows, "ЖАНРЫ", f"{user['tg_name']}  ·  {label}", rows, unit_note="доля, %", tag="genres", theme=await for_chat(db, message.chat.id),
         covers=covers
     )
     await _send_photo(message, buf, name="genres.jpg")
