@@ -2,6 +2,7 @@ import io
 import math
 import logging
 import os
+import random
 from typing import List, Optional, Tuple
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
@@ -228,6 +229,31 @@ def _create_placeholder(size: int) -> Image.Image:
     return card
 
 
+GOOFY_DIR = os.path.join(os.path.dirname(FONTS_DIR), "goofy")
+_GOOFY_EXT = (".jpg", ".jpeg", ".png", ".webp", ".gif")
+
+
+def _goofy_files() -> List[str]:
+    try:
+        names = sorted(n for n in os.listdir(GOOFY_DIR) if n.lower().endswith(_GOOFY_EXT))
+    except OSError:
+        return []
+    return [os.path.join(GOOFY_DIR, n) for n in names]
+
+
+def _goofy_slot(path: str, size: int, radius: int) -> Optional[Image.Image]:
+    """Random meme picture as a filler tile (square centre-crop), or None if unreadable."""
+    try:
+        with Image.open(path) as im:
+            im = im.convert("RGB")
+            m = min(im.size)
+            im = im.crop(((im.width - m) // 2, (im.height - m) // 2, (im.width + m) // 2, (im.height + m) // 2))
+            return _round_corners(im.resize((size, size), Image.Resampling.LANCZOS).convert("RGBA"), radius)
+    except Exception as e:
+        logger.warning("Bad goofy image %s: %s", path, e)
+        return None
+
+
 def _create_empty_slot(size: int, radius: int, item: Optional[TrackInfo] = None) -> Image.Image:
     """Filler tile: tinted, blurred cover of someone else's track instead of a blank slot."""
     card = None
@@ -414,6 +440,8 @@ def build_collage(items: List[TrackInfo], cell_size: int = CELL_SIZE, theme: The
     shadow_img, shadow_pad = _create_shadow(card_size, card_radius)
 
     total_cells = cols * rows
+    goofy = _goofy_files()
+    random.shuffle(goofy)
     for idx in range(total_cells):
         col = idx % cols
         row = idx // cols
@@ -425,7 +453,10 @@ def build_collage(items: List[TrackInfo], cell_size: int = CELL_SIZE, theme: The
         if idx < n:
             card_img = _render_single_card(items[idx], card_size, card_radius, banner_height, theme, idx)
         else:
-            card_img = _create_empty_slot(card_size, card_radius, items[(idx - n) % n])
+            k = idx - n
+            card_img = _goofy_slot(goofy[k % len(goofy)], card_size, card_radius) if goofy else None
+            if card_img is None:
+                card_img = _create_empty_slot(card_size, card_radius, items[k % n])
 
         canvas.paste(card_img, (base_x, base_y), card_img)
 
