@@ -6,9 +6,10 @@ from aiogram.types import BufferedInputFile, InlineKeyboardButton, InlineKeyboar
 from aiogram.utils.formatting import Bold, Italic, Text, TextLink
 
 from bot.collage import build_collage
+from bot.config import config
 from bot.database import Database
 from bot.formatting import (
-    listen_links, now_playing_html_chunks, services_legend, user_name, user_name_html,
+    listen_link_nodes, now_playing_html_chunks, services_legend, user_name, user_name_html,
 )
 from bot.lastfm import LastFMClient
 from bot.themes import for_chat
@@ -139,10 +140,8 @@ async def cmd_now_playing(
     for item in active_tracks:
         if len(parts) > 1:
             parts.append(Text("\n\n"))
-        links = []
-        for emoji, _name, url in listen_links(item.artist, item.track):
-            links.extend([TextLink(emoji, url=url), " "])
-        parts.append(Text(Bold(user_name(item.tg_name)), ": ", item.artist, " — ", item.track, "\n", *links[:-1]))
+        links = listen_link_nodes(item.artist, item.track, config.PREMIUM_EMOJI)
+        parts.append(Text(Bold(user_name(item.tg_name)), ": ", item.artist, " — ", item.track, "\n", *links))
 
     active_ids = {item.tg_id for item in active_tracks}
     idle = [user_name(m["tg_name"]) for m in members if m["tg_id"] not in active_ids]
