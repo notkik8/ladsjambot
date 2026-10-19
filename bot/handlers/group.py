@@ -7,7 +7,9 @@ from aiogram.utils.formatting import Bold, Italic, Text, TextLink
 
 from bot.collage import build_collage
 from bot.database import Database
-from bot.formatting import now_playing_html_chunks, spotify_search_url, user_name, user_name_html
+from bot.formatting import (
+    listen_links, now_playing_html_chunks, services_legend, user_name, user_name_html,
+)
 from bot.lastfm import LastFMClient
 from bot.themes import for_chat
 
@@ -136,16 +138,17 @@ async def cmd_now_playing(
     parts = [Text("🎧 ", Bold("Сейчас слушают:"), "\n\n")]
     for item in active_tracks:
         if len(parts) > 1:
-            parts.append(Text("\n"))
-        parts.append(Text(
-            Bold(user_name(item.tg_name)), ": ", item.artist, " — ", item.track, " ",
-            TextLink("(послушать)", url=spotify_search_url(item.artist, item.track)),
-        ))
+            parts.append(Text("\n\n"))
+        links = []
+        for emoji, _name, url in listen_links(item.artist, item.track):
+            links.extend([TextLink(emoji, url=url), " "])
+        parts.append(Text(Bold(user_name(item.tg_name)), ": ", item.artist, " — ", item.track, "\n", *links[:-1]))
 
     active_ids = {item.tg_id for item in active_tracks}
     idle = [user_name(m["tg_name"]) for m in members if m["tg_id"] not in active_ids]
     if idle:
         parts.append(Text("\n\n", Italic("Не слушают: " + ", ".join(idle))))
+    parts.append(Text("\n\n", Italic(services_legend())))
     chunks = now_playing_html_chunks(Text(*parts))
 
     # 5. Send photo collage to group

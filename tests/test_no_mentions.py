@@ -62,7 +62,7 @@ class NoMentionsTests(unittest.IsolatedAsyncioTestCase):
             await cmd_now_playing(self.message, self.db, self.lastfm)
         caption = self.message.answer_photo.call_args.kwargs["caption"]
         self.assert_no_mentions(caption)
-        self.assertIn("<b>alice</b>: Artist — Track <a href=", caption)
+        self.assertIn("<b>alice</b>: Artist — Track\n<a href=", caption)
         self.assertIn('>(послушать)</a>', caption)
         self.assertIn("Не слушают: Bob &amp; bob", caption)
 

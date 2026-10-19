@@ -20,6 +20,28 @@ def spotify_search_url(artist: str, track: str) -> str:
     return "https://open.spotify.com/search/" + quote(f"{artist} {track}", safe="")
 
 
+# (emoji, name, search URL prefix, how the query is appended)
+SERVICES = (
+    ("🟢", "Spotify", "https://open.spotify.com/search/", ""),
+    ("🍎", "Apple Music", "https://music.apple.com/search?term=", ""),
+    ("▶️", "YouTube", "https://www.youtube.com/results?search_query=", ""),
+    ("🔴", "YT Music", "https://music.youtube.com/search?q=", ""),
+    ("🟡", "Яндекс Музыка", "https://music.yandex.ru/search?text=", ""),
+    ("☁️", "SoundCloud", "https://soundcloud.com/search?q=", ""),
+    ("🟣", "Deezer", "https://www.deezer.com/search/", ""),
+)
+
+
+def listen_links(artist: str, track: str) -> list[tuple[str, str, str]]:
+    """Search links for the track on every supported service: (emoji, name, url)."""
+    q = quote(f"{artist} {track}", safe="")
+    return [(emoji, name, prefix + q) for emoji, name, prefix, _ in SERVICES]
+
+
+def services_legend() -> str:
+    return " · ".join(f"{emoji} {name}" for emoji, name, _, _ in SERVICES)
+
+
 def now_playing_html_chunks(content: Text) -> list[str]:
     """Split a caption and follow-up messages without breaking links or Unicode.
 
