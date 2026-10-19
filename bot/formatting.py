@@ -20,16 +20,13 @@ def spotify_search_url(artist: str, track: str) -> str:
     return "https://open.spotify.com/search/" + quote(f"{artist} {track}", safe="")
 
 
-# (fallback emoji, name, search URL prefix, premium custom-emoji id from t.me/addemoji/ApplicationEmoji)
+# (fallback emoji, name, search URL prefix, premium custom-emoji id (ApplicationEmoji pack))
 SERVICES = (
     ("🟢", "Spotify", "https://open.spotify.com/search/", "5346074681004801565"),
     ("🍎", "Apple Music", "https://music.apple.com/search?term=", "5346251367369425932"),
     ("▶️", "YouTube", "https://www.youtube.com/results?search_query=", "5334681713316479679"),
-    ("🔴", "YT Music", "https://music.youtube.com/search?q=", ""),
-    ("🟡", "Яндекс Музыка", "https://music.yandex.ru/search?text=", ""),
-    ("🔵", "VK Музыка", "https://vk.com/audio?q=", "5334853932915114338"),
-    ("☁️", "SoundCloud", "https://soundcloud.com/search?q=", "5345844509412444249"),
-    ("🟣", "Deezer", "https://www.deezer.com/search/", "5345845252441784353"),
+    ("🟡", "Яндекс Музыка", "https://music.yandex.ru/search?text=", "5346296430166293639"),
+    ("🔵", "VK Музыка", "https://vk.com/audio?q=", "5345844509412444249"),
 )
 
 
