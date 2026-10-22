@@ -15,14 +15,12 @@ PREFIX = "theme:"
 
 
 def _label(key: str) -> str:
-    if key == themes.AUTO:
-        return "✨ Авто (по дате)"
     t = themes.THEMES[key]
     return f"{t.emoji} {t.title}"
 
 
 def _keyboard(current: str) -> InlineKeyboardMarkup:
-    keys = themes.ORDER + [themes.AUTO]
+    keys = themes.ORDER
     buttons = [
         InlineKeyboardButton(text=("✅ " if k == current else "") + _label(k), callback_data=PREFIX + k)
         for k in keys
@@ -31,13 +29,14 @@ def _keyboard(current: str) -> InlineKeyboardMarkup:
 
 
 def _text(current: str) -> str:
-    extra = ""
-    if current == themes.AUTO:
-        extra = f" (сейчас: {_label(themes.seasonal_key())})"
+    current = themes.resolve(current).key
+    styles = "\n".join(f"{themes.THEMES[k].emoji} <b>{themes.THEMES[k].title}</b> — {themes.THEMES[k].blurb}"
+                       for k in themes.ORDER)
     return (
         "🎨 <b>Тема оформления</b>\n"
-        "Меняет вид коллажа <code>/np</code> и всех картинок со статистикой в этом чате.\n\n"
-        f"Выбрано: <b>{_label(current)}</b>{extra}"
+        "Меняет стиль и структуру коллажа <code>/np</code> и всех картинок со статистикой в этом чате.\n\n"
+        f"{styles}\n\n"
+        f"Выбрано: <b>{_label(current)}</b>"
     )
 
 
@@ -50,7 +49,7 @@ async def _can_change(bot, chat_id: int, chat_type: str, user_id: int) -> bool:
 
 @router.message(Command("themes", "theme"))
 async def cmd_themes(message: Message, db: Database) -> None:
-    current = await db.get_chat_theme(message.chat.id)
+    current = themes.resolve(await db.get_chat_theme(message.chat.id)).key
     await message.answer(_text(current), reply_markup=_keyboard(current), parse_mode="HTML")
 
 
@@ -58,7 +57,7 @@ async def cmd_themes(message: Message, db: Database) -> None:
 async def on_theme_pick(query: CallbackQuery, db: Database) -> None:
     key = (query.data or "")[len(PREFIX):]
     msg = query.message
-    if key not in themes.THEMES and key != themes.AUTO:
+    if key not in themes.THEMES:
         await query.answer("Неизвестная тема")
         return
     if not msg:
@@ -72,7 +71,7 @@ async def on_theme_pick(query: CallbackQuery, db: Database) -> None:
     if not allowed:
         await query.answer("Менять тему могут только админы чата", show_alert=True)
         return
-    if key == await db.get_chat_theme(msg.chat.id):
+    if key == themes.resolve(await db.get_chat_theme(msg.chat.id)).key:
         await query.answer("Эта тема уже выбрана")
         return
     await db.set_chat_theme(msg.chat.id, key)

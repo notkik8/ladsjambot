@@ -83,7 +83,7 @@ async def main() -> None:
                 BotCommand(command="leaders", description="Лидеры группы по количеству прослушиваний"),
                 BotCommand(command="compat", description="Музыкальная совместимость"),
                 BotCommand(command="whoknows", description="Кто в группе слушает артиста"),
-                BotCommand(command="themes", description="Тема оформления картинок (Хэллоуин, Новый год…)"),
+                BotCommand(command="themes", description="Стиль оформления картинок"),
                 BotCommand(command="join", description="Привязаться к группе"),
                 BotCommand(command="help", description="Справка"),
             ]
