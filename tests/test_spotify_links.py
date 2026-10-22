@@ -92,7 +92,7 @@ class NowPlayingSpotifyTests(unittest.IsolatedAsyncioTestCase):
         message = SimpleNamespace(
             chat=SimpleNamespace(id=-100), from_user=None,
             bot=SimpleNamespace(send_chat_action=AsyncMock()),
-            answer=AsyncMock(), answer_photo=AsyncMock(),
+            answer=AsyncMock(), answer_photo=AsyncMock(), reply=AsyncMock(), reply_photo=AsyncMock(),
         )
         members = [{"tg_id": 1, "tg_name": "@alice"}, {"tg_id": 2, "tg_name": "@bob"}]
         db = SimpleNamespace(get_group_members=AsyncMock(return_value=members))
@@ -101,7 +101,7 @@ class NowPlayingSpotifyTests(unittest.IsolatedAsyncioTestCase):
         lastfm = SimpleNamespace(fetch_all_now_playing=AsyncMock(return_value=tracks))
         with patch("bot.handlers.group.build_collage", return_value=io.BytesIO(b"photo")):
             await cmd_now_playing(message, db, lastfm)
-        parsed = ParsedHTML(message.answer_photo.call_args.kwargs["caption"])
+        parsed = ParsedHTML(message.reply_photo.call_args.kwargs["caption"])
         expected = [url for t in tracks for _, _, url in listen_links(t.artist, t.track)]
         self.assertEqual(parsed.links, expected)
         self.assertEqual(expected[0], spotify_search_url("Drake", "God's Plan"))
@@ -110,4 +110,4 @@ class NowPlayingSpotifyTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("bob: Kanye West — POWER\n🟢", parsed.text)
         self.assertIn("🟢 Spotify · 🍎 Apple Music", parsed.text)
         self.assertNotIn("@", parsed.text)
-        message.answer.assert_not_awaited()
+        self.assertEqual(message.reply.await_count, 1)  # only the wait notice

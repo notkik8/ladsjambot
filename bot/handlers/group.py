@@ -112,8 +112,20 @@ async def cmd_now_playing(
         )
         return
 
-    # Visual feedback while processing
+    # Visual feedback while processing: a reply to the command that is removed once the result is sent
     await message.bot.send_chat_action(chat_id=chat_id, action="upload_photo")
+    wait = await message.reply("⏳ Секунду, собираю коллаж…")
+    try:
+        await _send_now_playing(message, db, lastfm, members)
+    finally:
+        try:
+            await wait.delete()
+        except Exception:
+            pass
+
+
+async def _send_now_playing(message: Message, db: Database, lastfm: LastFMClient, members) -> None:
+    chat_id = message.chat.id
 
     # 2. Concurrently fetch currently playing tracks
     active_tracks = await lastfm.fetch_all_now_playing(members)
@@ -121,7 +133,7 @@ async def cmd_now_playing(
     # Edge Case: Nobody is currently listening to music
     if not active_tracks:
         names = ", ".join(user_name_html(m["tg_name"]) for m in members)
-        await message.answer(
+        await message.reply(
             f"Сейчас никто ничего не слушает\n<i>Проверены: {names}</i>",
             parse_mode="HTML",
         )
@@ -132,7 +144,7 @@ async def cmd_now_playing(
         collage_buf = await asyncio.to_thread(build_collage, active_tracks, theme=await for_chat(db, chat_id))
     except Exception as e:
         logger.error("Failed to generate collage: %s", e)
-        await message.answer("⚠️ Произошла ошибка при генерации коллажа.")
+        await message.reply("⚠️ Произошла ошибка при генерации коллажа.")
         return
 
     # 4. Construct caption list: "Юзер: Артист — Трек"
@@ -156,10 +168,10 @@ async def cmd_now_playing(
         filename="nowplaying_collage.jpg",
     )
 
-    await message.answer_photo(
+    await message.reply_photo(
         photo=photo_file,
         caption=chunks[0],
         parse_mode="HTML",
     )
     for chunk in chunks[1:]:
-        await message.answer(chunk, parse_mode="HTML", disable_web_page_preview=True)
+        await message.reply(chunk, parse_mode="HTML", disable_web_page_preview=True)

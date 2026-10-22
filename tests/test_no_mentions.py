@@ -19,7 +19,7 @@ class NoMentionsTests(unittest.IsolatedAsyncioTestCase):
             from_user=SimpleNamespace(id=1, username="alice", full_name="Alice", is_bot=False),
             reply_to_message=None,
             bot=SimpleNamespace(send_chat_action=AsyncMock()),
-            answer=AsyncMock(), answer_photo=AsyncMock(), reply=AsyncMock(),
+            answer=AsyncMock(), answer_photo=AsyncMock(), reply=AsyncMock(), reply_photo=AsyncMock(),
         )
         self.members = [
             {"tg_id": 1, "tg_name": "@alice", "lastfm_user": "alice_fm"},
@@ -33,10 +33,11 @@ class NoMentionsTests(unittest.IsolatedAsyncioTestCase):
         )
         self.lastfm = SimpleNamespace(call=AsyncMock(), fetch_all_now_playing=AsyncMock(return_value=[]))
 
-    def assert_no_mentions(self, text):
+    def assert_no_mentions(self, text, allow_reply=False):
         self.assertNotIn("@", text)
         self.assertNotIn("tg://user", text)
-        self.message.reply.assert_not_awaited()
+        if not allow_reply:
+            self.message.reply.assert_not_awaited()
 
     def test_name_formatting(self):
         self.assertEqual(user_name_html("@alice"), "alice")
@@ -52,16 +53,16 @@ class NoMentionsTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_np_nobody_listening(self):
         await cmd_now_playing(self.message, self.db, self.lastfm)
-        text = self.message.answer.call_args.args[0]
-        self.assert_no_mentions(text)
+        text = self.message.reply.call_args.args[0]
+        self.assert_no_mentions(text, allow_reply=True)
         self.assertIn("alice, Bob &amp; bob", text)
 
     async def test_np_collage_and_idle_names(self):
         self.lastfm.fetch_all_now_playing.return_value = [TrackInfo(1, "@alice", "alice_fm", "Artist", "Track", None)]
         with patch("bot.handlers.group.build_collage", return_value=io.BytesIO(b"image")):
             await cmd_now_playing(self.message, self.db, self.lastfm)
-        caption = self.message.answer_photo.call_args.kwargs["caption"]
-        self.assert_no_mentions(caption)
+        caption = self.message.reply_photo.call_args.kwargs["caption"]
+        self.assert_no_mentions(caption, allow_reply=True)
         self.assertIn("<b>alice</b>: Artist — Track\n<a href=", caption)
         self.assertIn('>🟢</tg-emoji></a> <a href=', caption)
         self.assertIn("Не слушают: Bob &amp; bob", caption)
@@ -77,8 +78,8 @@ class NoMentionsTests(unittest.IsolatedAsyncioTestCase):
         ]
         with patch("bot.handlers.group.build_collage", return_value=io.BytesIO(b"image")):
             await cmd_now_playing(self.message, self.db, self.lastfm)
-        self.assert_no_mentions(self.message.answer_photo.call_args.kwargs["caption"])
-        self.assert_no_mentions(self.message.answer.call_args.args[0])
+        self.assert_no_mentions(self.message.reply_photo.call_args.kwargs["caption"], allow_reply=True)
+        self.assert_no_mentions(self.message.reply.call_args.args[0], allow_reply=True)
 
     async def test_compat_and_username_lookup(self):
         command = CommandObject(command="compat", args="@bob")
