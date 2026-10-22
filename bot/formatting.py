@@ -2,7 +2,7 @@
 import html
 from urllib.parse import quote
 
-from aiogram.utils.formatting import CustomEmoji, Text, TextLink
+from aiogram.utils.formatting import Text, TextLink
 
 
 def user_name(name: str) -> str:
@@ -20,36 +20,24 @@ def spotify_search_url(artist: str, track: str) -> str:
     return "https://open.spotify.com/search/" + quote(f"{artist} {track}", safe="")
 
 
-# (fallback emoji, name, search URL prefix, premium custom-emoji id (ApplicationEmoji pack))
+# (label, search URL prefix)
 SERVICES = (
-    ("🟢", "Spotify", "https://open.spotify.com/search/", "5346074681004801565"),
-    ("🍎", "Apple Music", "https://music.apple.com/search?term=", "5346251367369425932"),
-    ("▶️", "YouTube", "https://www.youtube.com/results?search_query=", "5334681713316479679"),
-    ("🟡", "Яндекс Музыка", "https://music.yandex.ru/search?text=", "5346296430166293639"),
-    ("🔵", "VK Музыка", "https://vk.com/audio?q=", "5345844509412444249"),
+    ("Spotify", "https://open.spotify.com/search/"),
+    ("Apple", "https://music.apple.com/search?term="),
 )
 
 
-def listen_links(artist: str, track: str) -> list[tuple[str, str, str]]:
-    """Search links for the track on every supported service: (emoji, name, url)."""
+def listen_links(artist: str, track: str) -> list[tuple[str, str]]:
+    """Search links for the track on every supported service: (label, url)."""
     q = quote(f"{artist} {track}", safe="")
-    return [(emoji, name, prefix + q) for emoji, name, prefix, _ in SERVICES]
+    return [(name, prefix + q) for name, prefix in SERVICES]
 
 
-def services_legend() -> str:
-    return " · ".join(f"{emoji} {name}" for emoji, name, _, _ in SERVICES)
-
-
-def listen_link_nodes(artist: str, track: str, premium: bool = True) -> list:
-    """Clickable emoji row; services in the premium pack get an animated custom emoji.
-
-    Telegram shows the fallback emoji to everyone who can't see custom emoji
-    (no Premium, or a bot that isn't allowed to send them), so nothing breaks.
-    """
+def listen_link_nodes(artist: str, track: str) -> list:
+    """Compact clickable row: Spotify | Apple."""
     nodes: list = []
-    for (emoji, _name, _prefix, emoji_id), (_, _, url) in zip(SERVICES, listen_links(artist, track)):
-        label = CustomEmoji(emoji, custom_emoji_id=emoji_id) if premium and emoji_id else emoji
-        nodes.extend([TextLink(label, url=url), " "])
+    for name, url in listen_links(artist, track):
+        nodes.extend([TextLink(name, url=url), " | "])
     return nodes[:-1]
 
 

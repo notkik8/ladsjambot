@@ -9,7 +9,7 @@ from bot.collage import build_collage
 from bot.config import config
 from bot.database import Database
 from bot.formatting import (
-    listen_link_nodes, now_playing_html_chunks, services_legend, user_name, user_name_html,
+    listen_link_nodes, now_playing_html_chunks, user_name, user_name_html,
 )
 from bot.lastfm import LastFMClient
 from bot.themes import for_chat
@@ -152,14 +152,13 @@ async def _send_now_playing(message: Message, db: Database, lastfm: LastFMClient
     for item in active_tracks:
         if len(parts) > 1:
             parts.append(Text("\n\n"))
-        links = listen_link_nodes(item.artist, item.track, config.PREMIUM_EMOJI)
+        links = listen_link_nodes(item.artist, item.track)
         parts.append(Text(Bold(user_name(item.tg_name)), ": ", item.artist, " — ", item.track, "\n", *links))
 
     active_ids = {item.tg_id for item in active_tracks}
     idle = [user_name(m["tg_name"]) for m in members if m["tg_id"] not in active_ids]
     if idle:
         parts.append(Text("\n\n", Italic("Не слушают: " + ", ".join(idle))))
-    parts.append(Text("\n\n", Italic(services_legend())))
     chunks = now_playing_html_chunks(Text(*parts))
 
     # 5. Send photo collage to group

@@ -18,8 +18,6 @@ class Config:
     )
     # Timezone offset (hours from UTC) used for day/hour bucketing in /stats
     TZ_OFFSET_HOURS: float = float(os.getenv("TZ_OFFSET_HOURS", "3"))
-    # Animated custom emoji for service links in /np (set to 0 to force plain emoji)
-    PREMIUM_EMOJI: bool = os.getenv("PREMIUM_EMOJI", "1").lower() not in ("0", "false", "no")
     LASTFM_RATE_LIMIT_SEMAPHORE: int = 4
     LASTFM_REQUEST_TIMEOUT: float = 6.0
     COVER_DOWNLOAD_TIMEOUT: float = 6.0

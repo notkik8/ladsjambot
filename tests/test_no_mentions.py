@@ -64,7 +64,7 @@ class NoMentionsTests(unittest.IsolatedAsyncioTestCase):
         caption = self.message.reply_photo.call_args.kwargs["caption"]
         self.assert_no_mentions(caption, allow_reply=True)
         self.assertIn("<b>alice</b>: Artist — Track\n<a href=", caption)
-        self.assertIn('>🟢</tg-emoji></a> <a href=', caption)
+        self.assertIn('>Spotify</a> | <a href=', caption)
         self.assertIn("Не слушают: Bob &amp; bob", caption)
 
     async def test_np_long_caption_continuation(self):

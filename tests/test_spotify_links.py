@@ -102,12 +102,11 @@ class NowPlayingSpotifyTests(unittest.IsolatedAsyncioTestCase):
         with patch("bot.handlers.group.build_collage", return_value=io.BytesIO(b"photo")):
             await cmd_now_playing(message, db, lastfm)
         parsed = ParsedHTML(message.reply_photo.call_args.kwargs["caption"])
-        expected = [url for t in tracks for _, _, url in listen_links(t.artist, t.track)]
+        expected = [url for t in tracks for _, url in listen_links(t.artist, t.track)]
         self.assertEqual(parsed.links, expected)
         self.assertEqual(expected[0], spotify_search_url("Drake", "God's Plan"))
         self.assertEqual(len(set(expected)), len(expected))
-        self.assertIn("alice: Drake — God's Plan\n🟢 🍎 ▶️ 🟡 🔵", parsed.text)
-        self.assertIn("bob: Kanye West — POWER\n🟢", parsed.text)
-        self.assertIn("🟢 Spotify · 🍎 Apple Music", parsed.text)
+        self.assertIn("alice: Drake — God's Plan\nSpotify | Apple", parsed.text)
+        self.assertIn("bob: Kanye West — POWER\nSpotify | Apple", parsed.text)
         self.assertNotIn("@", parsed.text)
         self.assertEqual(message.reply.await_count, 1)  # only the wait notice
