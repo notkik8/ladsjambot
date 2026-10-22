@@ -99,6 +99,11 @@ class Sheet:
         lum = 0.299 * col[0] + 0.587 * col[1] + 0.114 * col[2]
         return (12, 12, 16) if lum > 140 else (250, 250, 250)
 
+    def fg(self, col) -> Tuple[int, int, int]:
+        """Accent colour for text; on light themes bright accents (yellow) fall back to ink for contrast."""
+        lum = lambda c: 0.299 * c[0] + 0.587 * c[1] + 0.114 * c[2]
+        return self.t.ink if lum(self.t.bg) > 140 and lum(col) > 120 else col
+
     def chip(self, x0, y0, x1, y1, r, col):
         """Solid accent block (badge / KPI); hard style gets a thick outline + offset shadow."""
         if self.t.panel == "hard":
@@ -159,7 +164,10 @@ class Sheet:
     def bar(self, x0, y0, x1, y1, r, col):
         """Horizontal or vertical bar; terminal-style themes cut it into blocks."""
         if not self.t.bar_blocks:
-            self.rrect(x0, y0, x1, y1, r, fill=col)
+            if self.t.panel == "hard":
+                self.rrect(x0, y0, x1, y1, r, fill=col, outline=self.t.line, width=3)
+            else:
+                self.rrect(x0, y0, x1, y1, r, fill=col)
             return
         if (y1 - y0) >= (x1 - x0):  # vertical: stack blocks upward
             step = 14
@@ -186,6 +194,8 @@ class Sheet:
 # ---- shared blocks ---------------------------------------------------------
 def _hero_h(theme: Theme, h: int) -> int:
     """Plain (text-only) heroes are compact."""
+    if theme.hero == "band":
+        return max(h, 400)
     return 250 if theme.hero == "plain" else h
 
 
@@ -246,17 +256,20 @@ def _hero_band(sh: Sheet, covers: Sequence[Optional[bytes]], title: str, subtitl
     tw = sh.measure(tag.upper(), 26, fonts.BLACK)
     sh.chip(PAD, 40, PAD + tw + 48, 94, 0, ink)
     sh.text(PAD + 24, 67, tag.upper(), 26, acc, fonts.BLACK)
-    imgs = [i for i in (_open(c) for c in covers) if i][:3]
+    imgs = [i for i in (_open(c) for c in covers) if i][:4]
+    tile = min(165, h - 200)
+    gap = 14
     tx = W - PAD
     for im in reversed(imgs):
-        tx -= 120
-        sh.rect(tx - 4, 36, tx + 124, 164, ink)
-        sh.paste(im, tx, 40, size=120)
-        tx -= 16
+        tx -= tile
+        sh.rect(tx - 5 + 8, 40 + 8, tx + tile + 5 + 8, 40 + tile + 5 + 8, ink)
+        sh.rect(tx - 5, 35, tx + tile + 5, 45 + tile, ink)
+        sh.paste(im, tx, 40, size=tile)
+        tx -= gap + 10
     size = 104
     while size > 48 and sh.measure(title, size, fonts.BLACK) > W - 2 * PAD:
         size -= 4
-    sh.text(PAD, h - 120, title.upper(), size, ink, fonts.BLACK, max_w=W - 2 * PAD)
+    sh.text(PAD, h - 134, title.upper(), size, ink, fonts.BLACK, max_w=W - 2 * PAD)
     sh.text(PAD, h - 52, subtitle, 34, ink, fonts.BOLD, max_w=W - 2 * PAD)
     return h + 36
 
@@ -367,7 +380,7 @@ def _rank_list(sh: Sheet, y: int, rows: Sequence[Row], unit: str = "") -> int:
             sh.text(PAD + 30, cy, f"{i + 1}", 30, sh.on(col), fonts.BLACK, align="m")
         else:
             num = f"{i + 1:02d}" if sh.t.rank == "mono" else str(i + 1)
-            sh.text(PAD + 30, cy, num, 36, col, fonts.BLACK, align="m")
+            sh.text(PAD + 30, cy, num, 36, sh.fg(col), fonts.BLACK, align="m")
         tx = PAD + 84
         vtxt = f"{val:,}".replace(",", " ")
         vw = sh.measure(vtxt, 36, fonts.BLACK)
@@ -377,7 +390,7 @@ def _rank_list(sh: Sheet, y: int, rows: Sequence[Row], unit: str = "") -> int:
             sh.text(tx, cy + 22, sub, 28, sh.t.muted, fonts.SEMIBOLD, max_w=maxw)
         else:
             sh.text(tx, cy, label, 36, sh.t.ink, fonts.EXTRABOLD, max_w=maxw)
-        sh.text(W - PAD - 12, cy, vtxt, 36, col, fonts.BLACK, align="r")
+        sh.text(W - PAD - 12, cy, vtxt, 36, sh.fg(col), fonts.BLACK, align="r")
         y += row_h
     return y
 
@@ -403,10 +416,10 @@ def _stats_ranking(sh: Sheet, x: int, y: int, width: int, title: str, rows: Sequ
     for i, (label, sub, val) in enumerate(rows):
         ry = y + 80 + i * 92
         col = sh.pal[i % len(sh.pal)]
-        sh.text(x + 24, ry + 25, str(i + 1), 26, col, fonts.BLACK)
+        sh.text(x + 24, ry + 25, str(i + 1), 26, sh.fg(col), fonts.BLACK)
         value = f"{val:,}".replace(",", " ")
         vw = sh.measure(value, 28, fonts.BLACK)
-        sh.text(x + width - 24, ry + 25, value, 28, col, fonts.BLACK, align="r")
+        sh.text(x + width - 24, ry + 25, value, 28, sh.fg(col), fonts.BLACK, align="r")
         sh.text(x + 58, ry + 25, label, 28, sh.t.ink, fonts.EXTRABOLD, max_w=width - 106 - vw)
         if sub:
             sh.text(x + 58, ry + 55, sub, 23, sh.t.muted, fonts.SEMIBOLD, max_w=width - 82)
@@ -510,7 +523,7 @@ def render_versus(
     covers: Sequence[Optional[bytes]] = (), theme: Theme = DEFAULT,
 ) -> io.BytesIO:
     hero_h = _hero_h(theme, 460)
-    height = hero_h + 36 + 20 + 190 * len(metrics) + 110
+    height = hero_h + 36 + 20 + 150 * len(metrics) + 110
     sh = Sheet(height, _palette(covers, theme), theme)
     y = _hero(sh, covers, f"{name_a} vs {name_b}", subtitle, "versus", hero_h) + 20
     wins_a = sum(1 for _, a, b in metrics if a > b)
@@ -518,16 +531,17 @@ def render_versus(
     cx = W / 2
     half = cx - PAD
     ca, cb = sh.pal[0], sh.pal[2]
+    loser = tuple(int(l * 0.25 + b * 0.75) for l, b in zip(sh.t.line, sh.t.bg))
     for label, a, b in metrics:
-        sh.panel(PAD - 12, y, W - PAD + 12, y + 172, 34)
-        sh.label(cx, y + 34, label, sh.t.muted, align="m", size=26)
+        sh.panel(PAD - 12, y, W - PAD + 12, y + 132, 34)
+        sh.label(cx, y + 30, label, sh.t.muted, align="m", size=24)
         m = max(a, b, 1)
-        by = y + 118
-        wa, wb = int((half - 150) * a / m), int((half - 150) * b / m)
-        sh.bar(cx - 14 - max(wa, 10), by - 14, cx - 14, by + 14, 14, ca if a >= b else sh.t.line)
-        sh.bar(cx + 14, by - 14, cx + 14 + max(wb, 10), by + 14, 14, cb if b >= a else sh.t.line)
-        sh.text(PAD + 8, y + 34, f"{a:,}".replace(",", " "), 40, ca, fonts.BLACK)
-        sh.text(W - PAD - 8, y + 34, f"{b:,}".replace(",", " "), 40, cb, fonts.BLACK, align="r")
-        y += 190
+        by = y + 92
+        wa, wb = int((half - 190) * a / m), int((half - 190) * b / m)
+        sh.bar(cx - 12 - max(wa, 10), by - 18, cx - 12, by + 18, 14, ca if a >= b else loser)
+        sh.bar(cx + 12, by - 18, cx + 12 + max(wb, 10), by + 18, 14, cb if b >= a else loser)
+        sh.text(PAD + 8, by, f"{a:,}".replace(",", " "), 44, sh.fg(ca), fonts.BLACK)
+        sh.text(W - PAD - 8, by, f"{b:,}".replace(",", " "), 44, sh.fg(cb), fonts.BLACK, align="r")
+        y += 150
     _footer(sh, y + 10, f"{wins_a} : {wins_b}")
     return sh.export()
