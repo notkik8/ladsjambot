@@ -28,14 +28,25 @@ def _keyboard(current: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[buttons[i:i + 2] for i in range(0, len(buttons), 2)])
 
 
+def _line(key: str) -> str:
+    t = themes.THEMES[key]
+    return f"{t.emoji} <b>{t.title}</b> — {t.blurb}"
+
+
+def _is_light(key: str) -> bool:
+    r, g, b = themes.THEMES[key].bg
+    return 0.299 * r + 0.587 * g + 0.114 * b > 140
+
+
 def _text(current: str) -> str:
     current = themes.resolve(current).key
-    styles = "\n".join(f"{themes.THEMES[k].emoji} <b>{themes.THEMES[k].title}</b> — {themes.THEMES[k].blurb}"
-                       for k in themes.ORDER)
+    dark = "\n".join(_line(k) for k in themes.ORDER if not _is_light(k))
+    light = "\n".join(_line(k) for k in themes.ORDER if _is_light(k))
     return (
         "🎨 <b>Тема оформления</b>\n"
         "Меняет стиль и структуру коллажа <code>/np</code> и всех картинок со статистикой в этом чате.\n\n"
-        f"{styles}\n\n"
+        f"🌙 <b>Тёмные</b>\n{dark}\n\n"
+        f"☀️ <b>Светлые</b>\n{light}\n\n"
         f"Выбрано: <b>{_label(current)}</b>"
     )
 
