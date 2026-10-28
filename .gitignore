@@ -32,3 +32,5 @@ Thumbs.db
 *.log
 logs/
 scratch/
+.cache/
+.superpowers/

@@ -12,6 +12,8 @@ from bot.database import Database
 from bot.handlers import group_router, private_router, stats_router, themes_router
 from bot.lastfm import LastFMClient
 from bot.middlewares import GroupMemberTrackerMiddleware
+from bot.canvas.service import CanvasService
+from bot.handlers.canvas import router as canvas_router
 
 logging.basicConfig(
     level=logging.INFO,
@@ -57,11 +59,14 @@ async def main() -> None:
     # Pass dependencies to all handlers via workflow_data
     dp["db"] = db
     dp["lastfm"] = lastfm_client
+    canvas_service = CanvasService(model_path=config.CANVAS_MODEL_PATH, ffmpeg=config.CANVAS_FFMPEG, temp_dir=config.CANVAS_TEMP_DIR)
+    dp["canvas_service"] = canvas_service
 
     # Register Middlewares (outer_middleware ensures all messages update group membership)
     dp.message.outer_middleware(GroupMemberTrackerMiddleware(db=db))
 
     # Register Routers
+    dp.include_router(canvas_router)
     dp.include_router(stats_router)
     dp.include_router(themes_router)
     dp.include_router(private_router)
@@ -71,6 +76,9 @@ async def main() -> None:
         await bot.set_my_commands(
             [
                 BotCommand(command="np", description="Коллаж: что слушают сейчас"),
+                BotCommand(command="canvas", description="15 секунд моего текущего трека"),
+                BotCommand(command="npcanvas", description="Канвас группы: по 6 секунд на трек"),
+                BotCommand(command="npc", description="Короткая команда группового канваса"),
                 BotCommand(command="stats", description="Моя статистика за N дней"),
                 BotCommand(command="top", description="Мои топы: альбомы/артисты/треки"),
                 BotCommand(command="vs", description="Дуэль: сравнить статистику с другом"),
@@ -97,6 +105,7 @@ async def main() -> None:
         await dp.start_polling(bot)
     finally:
         logger.info("Shutting down bot...")
+        await canvas_service.close()
         await http_session.close()
         await db.close()
         await bot.session.close()

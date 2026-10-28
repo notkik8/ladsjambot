@@ -1,6 +1,32 @@
 # 🎵 LadsJam — Telegram Now Playing Bot
 
-[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
+## Музыкальные канвасы
+
+- `/canvas` или точное сообщение `canvas`: 15 секунд текущего Last.fm-трека автора команды, в ЛС и группе.
+- `/npcanvas`, `/npc`, `npcanvas`, `npc`: тот же коллаж, что `/np`; карточки активируются по очереди, каждая звучит 6 секунд. Никакого наложения аудио. До 64 участников; большие группы автоматически делятся на видео по четыре звучащих трека (24 секунды), с общей сеткой в каждой части.
+- Используется тема чата из `/themes`. MP4 H.264/AAC с анимацией активной карточки, эквалайзером и полосой прогресса.
+- Название/исполнитель берутся из Last.fm, в том числе для песен, прослушанных в Spotify. Звук ищется на YouTube/SoundCloud через yt-dlp; проверяются исполнитель, название, версия и доступная длительность. Spotify-аудио напрямую не извлекается. Источник указан в подписи.
+- YAMNet оценивает вокал/рэп, анализ гармонического повторения и энергии выбирает непрерывный фрагмент. У инструментальной музыки вокал не требуется. Это эвристика: гарантировать припев для любой песни нельзя. Никаких дополнительных кнопок или выбора фрагмента.
+- Если уверенного доступного совпадения нет, соло сообщает об ошибке; в группе карточка остаётся, но её очередь пропускается. Если недоступны все треки, пустое видео не отправляется.
+
+### Установка канвасов
+
+Требуется **Python 3.12+**, FFmpeg с libx264/AAC и Node.js 20+ для YouTube extractor. Dockerfile устанавливает зависимости и проверенную модель автоматически. При обычной установке:
+
+```bash
+pip install -r requirements.txt
+python scripts/install_canvas_model.py
+# Debian/Ubuntu: apt install ffmpeg nodejs (проверьте node --version >= 20)
+python main.py
+```
+
+`CANVAS_MODEL_PATH`, `CANVAS_FFMPEG` и необязательный `CANVAS_TEMP_DIR` описаны в `.env.example`. Модель YAMNet берётся из [официального MediaPipe-хранилища Google](https://storage.googleapis.com/mediapipe-models/audio_classifier/yamnet/float32/1/yamnet.tflite), размер 4 126 810 байт, SHA-256 проверяется установщиком и загрузчиком. Исходный [YAMNet](https://github.com/tensorflow/models/tree/master/research/audioset/yamnet) — Apache-2.0. Модель не хранится в Git; веса остаются на диске, аудио/видео — только временно.
+
+Один job глобально, максимум два ожидающих; повторный запрос того же чата отклоняется. Источники обрабатываются по одному, до 10 минут/40 МиБ на источник, до 120 секунд на обработку трека и 15 минут на весь запрос. FFmpeg работает в один поток. После отправки/ошибки временные файлы удаляются. В памяти остаётся до 128 записей Telegram `file_id` на час (при пропусках — на две минуты). Недоступность YouTube/SoundCloud, ограничения региона и авторизации могут помешать загрузке даже при правильном совпадении.
+
+Проверка: `python -m unittest discover -s tests`. Для реальной проверки последовательного звука укажите `CANVAS_FFMPEG` (путь к FFmpeg): тест кодирует два разных тона, декодирует видео и проверяет отсутствие второго тона во время первого.
+
+[![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
 [![aiogram 3.x](https://img.shields.io/badge/aiogram-3.x-2CA5E0.svg)](https://github.com/aiogram/aiogram)
 [![Last.fm API](https://img.shields.io/badge/Last.fm-API-D51007.svg)](https://www.last.fm/api)
 [![Docker Ready](https://img.shields.io/badge/docker-ready-2496ED.svg)](https://www.docker.com/)

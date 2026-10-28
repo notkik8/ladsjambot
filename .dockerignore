@@ -1,0 +1,12 @@
+.git
+.venv
+.env
+.env.*
+!.env.example
+.cache
+.superpowers
+__pycache__
+*.db
+*.db-*
+data
+scratch
