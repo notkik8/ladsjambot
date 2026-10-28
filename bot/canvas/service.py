@@ -91,7 +91,7 @@ class CanvasService:
                 try:
                     with tempfile.TemporaryDirectory(prefix=f'audio-{i}-',dir=root) as audio_folder:
                         directory=Path(audio_folder)
-                        async with asyncio.timeout(120):
+                        async with asyncio.timeout(180):
                             info=await lastfm.call('track.getInfo',retries=0,artist=item.artist,track=item.track)
                             try: duration=float((info or {}).get('track',{}).get('duration',0))/1000 or None
                             except (ValueError,TypeError,AttributeError): duration=None
