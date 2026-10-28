@@ -109,16 +109,18 @@ class CanvasService:
                     except BaseException:
                         shutil.rmtree(directory,ignore_errors=True); raise
             jobs=[asyncio.create_task(prepare(i,item)) for i,item in enumerate(items)]
+            previous=-1
             try:
                 for i,(item,job) in enumerate(zip(items,jobs)):
                     try:
                         directory,audio,start,pcm=await job
                         path=root/f'clip-{i:03d}.mp4'
                         try:
-                            await render_segment(frames,Segment(i,audio.path,start,seconds,pcm),path,self.ffmpeg)
+                            # Clips in the same video slide in from the previous card; a new video opens fresh.
+                            await render_segment(frames,Segment(i,audio.path,start,seconds,pcm,previous if parts else -1),path,self.ffmpeg)
                         finally:
                             shutil.rmtree(directory,ignore_errors=True); del pcm
-                        parts.append(path)
+                        parts.append(path); previous=i
                         name=escape(item.tg_name[:32]); title=escape(f'{item.artist} — {item.track}'[:70])
                         captions.append(f'{i+1}. {name}: {title} · <a href="{escape(audio.url,quote=True)}">{audio.source}</a>')
                     except (MediaError,TimeoutError,ValueError,OSError) as exc:

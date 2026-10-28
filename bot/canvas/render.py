@@ -1,10 +1,12 @@
 """Stream a themed collage to FFmpeg; concatenate clips without audio crossfade."""
 import asyncio
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import colorsys
 import io
 import math
+import os
 from pathlib import Path
+import threading
 import numpy as np
 from PIL import Image, ImageDraw, ImageEnhance, ImageFilter
 
@@ -19,6 +21,7 @@ class Segment:
     start: float
     seconds: int
     waveform: np.ndarray
+    came_from: int = -1  # previous card in the same video, -1 = the video opens on this clip
 
 
 @dataclass
@@ -41,7 +44,8 @@ class CanvasFrames:
         self.layout=self.SOLO if self.count==1 else self.GROUP
         self.thumb=self._s(52)
         self.thumbs=[self._square(self._cover(item),self.thumb) for item in items]
-        self._cached=None; self._cards={}
+        self._statics={}; self._cards={}
+        self._eq_geometry()
 
     def _s(self, value): return max(1,round(value*self.u))
 
@@ -83,7 +87,7 @@ class CanvasFrames:
         return text.rstrip()+'…',f
 
     def _static(self, index):
-        if self._cached and self._cached[0]==index: return self._cached[1:]
+        if index in self._statics: return self._statics[index]
         S=self.width; L=self.layout; item=self.items[index]
         cover=self._cover(item); accent=self._accent(cover)
         # Backdrop: heavily blurred cover, tinted by the accent, darker towards the text area.
@@ -93,11 +97,7 @@ class CanvasFrames:
         ramp=1-.3*np.clip((np.arange(S)-S/2)/(S/2),0,1)
         bg=Image.fromarray((np.asarray(bg,dtype=np.float32)*ramp[:,None,None]).astype(np.uint8))
         canvas=bg.convert('RGBA')
-        cs=self._s(L['cover']); cx=(S-cs)//2; cy=self._s(L['top']); radius=round(cs*.06)
-        # Soft drop shadow under the cover.
-        shadow=Image.new('L',(S,S),0)
-        ImageDraw.Draw(shadow).rounded_rectangle((cx,cy+self._s(16),cx+cs,cy+cs+self._s(16)),radius=radius,fill=150)
-        canvas.paste((0,0,0,255),mask=shadow.filter(ImageFilter.GaussianBlur(self._s(22))))
+        cs=self._s(L['cover']); radius=round(cs*.06)
         card=self._square(cover,cs)
         # Listener chip lives on the cover so it pulses with it.
         name,f=self._fit(item.tg_name,16,BOLD,cs*.6)
@@ -109,6 +109,12 @@ class CanvasFrames:
         overlay.ellipse((x0+px,y0+(chip_h-dot)//2,x0+px+dot,y0+(chip_h+dot)//2),fill=accent)
         overlay.text((x0+px+dot+self._s(8),y0+chip_h//2),name,font=f,fill=self.LIGHT,anchor='lm')
         card=Image.alpha_composite(card.convert('RGBA'),chip)
+        # The soft drop shadow is part of the card so it slides with it in transitions.
+        pad=self._s(48); full=Image.new('RGBA',(cs+2*pad,cs+2*pad),(0,0,0,0))
+        shadow=Image.new('L',full.size,0)
+        ImageDraw.Draw(shadow).rounded_rectangle((pad,pad+self._s(16),pad+cs,pad+cs+self._s(16)),radius=radius,fill=150)
+        full.putalpha(shadow.filter(ImageFilter.GaussianBlur(self._s(22))))
+        full.alpha_composite(self._rounded(card,radius),(pad,pad))
         draw=ImageDraw.Draw(canvas)
         label='LADSJAM'; lf=font(self._s(13),BOLD); gap=self._s(4)
         total=sum(lf.getlength(c)+gap for c in label)-gap; lx=(S-total)/2
@@ -117,15 +123,22 @@ class CanvasFrames:
         margin=S-2*self._s(48)
         title,tf=self._fit(item.track,self._s(L['title_px']),EXTRABOLD,margin)
         artist,af=self._fit(item.artist,self._s(L['artist_px']),SEMIBOLD,margin)
-        ty=self._s(L['title']); draw.text((S/2,ty),title,font=tf,fill=self.LIGHT,anchor='mt')
-        draw.text((S/2,ty+tf.size+self._s(8)),artist,font=af,fill=accent,anchor='mt')
+        # Title and artist live on their own layer so transitions can move them separately.
+        ty=self._s(L['title']); top=ty-self._s(8)
+        words=Image.new('RGBA',(S,tf.size+af.size+self._s(28)),(0,0,0,0)); write=ImageDraw.Draw(words)
+        write.text((S/2,ty-top),title,font=tf,fill=self.LIGHT,anchor='mt')
+        write.text((S/2,ty-top+tf.size+self._s(8)),artist,font=af,fill=accent,anchor='mt')
         by=self._s(L['bar']); lo=self._s(60)
         overlay=Image.new('RGBA',(S,S),(0,0,0,0))
         ImageDraw.Draw(overlay).rounded_rectangle((lo,by,S-lo,by+self._s(6)),radius=self._s(3),fill=(255,255,255,60))
         if self.count>1: self._strip(overlay,index,accent)
-        canvas=Image.alpha_composite(canvas,overlay).convert('RGB')
-        self._cached=(index,canvas,self._rounded(card,radius),accent); self._cards={}
-        return self._cached[1:]
+        backdrop=Image.alpha_composite(canvas,overlay)
+        base=backdrop.copy(); base.alpha_composite(words,(0,top))
+        entry=self._statics[index]=(base.convert('RGB'),full,accent,backdrop.convert('RGB'),(words,top))
+        # Only the current card and the one it came from are ever needed.
+        while len(self._statics)>2: self._statics.pop(next(iter(self._statics)))
+        self._cards={key:value for key,value in self._cards.items() if key[0] in self._statics}
+        return entry
 
     def _strip(self, overlay, index, accent):
         # Queue strip: a window of covers around the active one; the others stay dimmed.
@@ -139,56 +152,115 @@ class CanvasFrames:
             if i==index: draw.rounded_rectangle((x-3,y-3,x+t+2,y+t+2),radius=self._s(12),outline=accent,width=3)
             x+=t+gap
 
-    def _shapes(self, canvas, box, fill, draw, samples, ss=4):
-        """Antialiased, motion-blurred shapes: average every sub-frame's supersampled mask, paste the colour through it."""
-        x0,y0,x1,y1=box; size=(x1-x0,y1-y0)
-        total=np.zeros((size[1],size[0]),dtype=np.float32)
-        for sample in samples:
-            mask=Image.new('L',(size[0]*ss,size[1]*ss),0)
-            draw(ImageDraw.Draw(mask),lambda x,y:((x-x0)*ss,(y-y0)*ss),ss,sample)
-            total+=np.asarray(mask.resize(size,Image.Resampling.BOX),dtype=np.float32)
-        canvas.paste(fill,box,Image.fromarray((total/len(samples)+.5).astype(np.uint8)))
+    def _eq_geometry(self):
+        # Pixel-centre grids for the EQ row and progress bar; antialiasing is computed analytically from distances.
+        S=self.width; L=self.layout; self.bw=self._s(12); gap=self._s(8); count=16
+        x0=(S-(count*self.bw+(count-1)*gap))//2; self.mid=self._s(L['eq']); self.half=self._s(L['eq_h'])
+        self.eq_box=(x0-2,self.mid-self.half-2,x0+count*(self.bw+gap)+2,self.mid+self.half+2)
+        xs=np.arange(self.eq_box[0],self.eq_box[2])+.5
+        centres=x0+np.arange(count)*(self.bw+gap)+self.bw/2
+        self.eq_bar=np.clip(np.rint((xs-x0-self.bw/2)/(self.bw+gap)),0,count-1).astype(int)
+        self.eq_dx=(xs-centres[self.eq_bar])[None,:]
+        self.eq_dy=np.abs(np.arange(self.eq_box[1],self.eq_box[3])+.5-self.mid)[:,None]
+        self.lo=self._s(60); self.by=self._s(L['bar']); self.thick=self._s(6); self.knob=self._s(7)
+        cy=self.by+self.thick/2
+        self.bar_box=(self.lo-self.knob-2,round(cy-self.knob)-2,S-self.lo+self.knob+2,round(cy+self.knob)+2)
+        self.bar_x=(np.arange(self.bar_box[0],self.bar_box[2])+.5)[None,:]
+        self.bar_y=(np.arange(self.bar_box[1],self.bar_box[3])+.5-cy)[:,None]
 
-    def _pulsed(self, card, w):
-        # The pulse only spans a few pixel sizes, so each scaled cover is made once per clip.
-        if w not in self._cards: self._cards[w]=card.resize((w,w),Image.Resampling.BICUBIC)
-        return self._cards[w]
+    @staticmethod
+    def _mask(alpha):
+        return Image.fromarray((np.clip(alpha,0,1)*255+.5).astype(np.uint8))
 
-    def frame(self, index, t, seconds, bars):
-        return self._render(index,seconds,[(t,np.asarray(bars,dtype=np.float32))])
+    def _eq_alpha(self, bars):
+        r=self.bw/2
+        # Each stick is a vertical capsule: distance to its core segment minus the radius.
+        length=np.maximum(np.maximum(r,np.asarray(bars,dtype=np.float32)*self.half)-r,0)[self.eq_bar][None,:]
+        dist=np.hypot(self.eq_dx,np.maximum(self.eq_dy-length,0))-r
+        return np.clip(.5-dist,0,1)
 
-    def motion(self, index, t, seconds, previous, bars, fps, samples=4):
+    def _bar_alpha(self, t, seconds):
+        r=self.thick/2; span=self.width-2*self.lo
+        end=self.lo+max(self.thick,span*min(1,max(0,t+1/24)/seconds))
+        dx=np.maximum(np.maximum(self.lo+r-self.bar_x,self.bar_x-(end-r)),0)
+        fill=np.clip(.5-(np.hypot(dx,self.bar_y)-r),0,1)
+        knob=np.clip(.5-(np.hypot(self.bar_x-end,self.bar_y)-self.knob),0,1)
+        return fill,knob
+
+    def _place(self, canvas, card, dx=0., dy=0., scale=1., alpha=1., key=None, fast=False):
+        S=self.width; L=self.layout; w=max(2,round(card.width*scale))
+        if key is not None and (key,w) in self._cards: image=self._cards[key,w]
+        else:
+            image=card.resize((w,w),Image.Resampling.BILINEAR if fast else Image.Resampling.BICUBIC)
+            if key is not None: self._cards[key,w]=image
+        if alpha<1:
+            image=image.copy(); image.putalpha(image.getchannel('A').point(lambda v:round(v*alpha)))
+        cs=self._s(L['cover']); centre=(S/2+dx,self._s(L['top'])+cs/2+dy)
+        canvas.paste(image,(round(centre[0]-w/2),round(centre[1]-w/2)),image)
+
+    def frame(self, index, t, seconds, bars, came_from=None):
+        return self._render(index,seconds,[(t,np.asarray(bars,dtype=np.float32))],came_from)
+
+    def motion(self, index, t, seconds, previous, bars, fps, samples=4, came_from=None):
         """Motion-blurred frame: moving shapes are averaged across a 180-degree shutter."""
         previous=np.asarray(previous,dtype=np.float32); bars=np.asarray(bars,dtype=np.float32)
         steps=[(k+1)/samples for k in range(samples)]
-        return self._render(index,seconds,[(t-.5*(1-a)/fps,previous+(bars-previous)*a) for a in steps])
+        return self._render(index,seconds,[(t-.5*(1-a)/fps,previous+(bars-previous)*a) for a in steps],came_from)
 
-    def _render(self, index, seconds, samples):
-        base,card,accent=self._static(index)
-        S=self.width; L=self.layout; t=samples[-1][0]
-        canvas=base.copy()
-        cs=card.width; cx=(S-cs)//2; cy=self._s(L['top'])
-        # The cover breathes with the active clip's audio; it never leaves its own frame.
-        w=round(cs*(1+.025*float(np.mean([np.mean(bars) for _,bars in samples]))))
-        pulsed=self._pulsed(card,w)
-        canvas.paste(pulsed,(cx-(w-cs)//2,cy-(w-cs)//2),pulsed)
-        count=len(samples[-1][1]); bw=self._s(12); gap=self._s(8); x0=(S-(count*bw+(count-1)*gap))//2
-        mid=self._s(L['eq']); half=self._s(L['eq_h'])
-        def sticks(draw,pt,ss,sample):
-            for j,value in enumerate(sample[1]):
-                h=max(self._s(3),float(value)*half); x=x0+j*(bw+gap)
-                draw.rounded_rectangle((*pt(x,mid-h),*pt(x+bw,mid+h)),radius=bw*ss/2,fill=255)
-        self._shapes(canvas,(x0-2,mid-half-3,x0+count*(bw+gap)+2,mid+half+4),accent,sticks,samples)
-        by=self._s(L['bar']); lo=self._s(60); span=S-2*lo; knob=self._s(7); thick=self._s(6)
-        def end(sample): return lo+max(self._s(6),span*min(1,(sample[0]+1/24)/seconds))
-        box=(lo-2,by+thick//2-knob-2,S-lo+knob+2,by+thick//2+knob+3)
-        self._shapes(canvas,box,accent,lambda draw,pt,ss,sample:draw.rounded_rectangle((*pt(lo,by),*pt(end(sample),by+thick)),radius=thick*ss/2,fill=255),samples)
-        self._shapes(canvas,box,self.LIGHT,lambda draw,pt,ss,sample:draw.ellipse((*pt(end(sample)-knob,by+thick/2-knob),*pt(end(sample)+knob,by+thick/2+knob)),fill=255),samples)
+    TRANSITION=.6
+
+    def _covers(self, canvas, index, came_from, p):
+        S=self.width; card=self._static(index)[1]; ease=1-(1-p)**3
+        if came_from>=0:
+            # Carousel: the previous cover slides out left and shrinks, the new one glides in from the right.
+            leave=p*p*(3-2*p); back=1+2.2*(p-1)**3+1.2*(p-1)**2
+            self._place(canvas,self._static(came_from)[1],dx=-.62*S*leave,scale=1-.22*leave,alpha=1-leave,fast=True)
+            self._place(canvas,card,dx=.62*S*(1-back),scale=.78+.22*ease,alpha=min(1.,p*2.2),fast=True)
+        else:
+            # Opening: the scene brightens while the cover rises into place.
+            self._place(canvas,card,dy=self._s(36)*(1-ease),scale=.9+.1*ease,alpha=.35+.65*ease,fast=True)
+
+    def _words(self, canvas, words, alpha, dy):
+        layer,top=words
+        if alpha<=0: return
+        if alpha<1: layer=layer.copy(); layer.putalpha(layer.getchannel('A').point(lambda v:round(v*alpha)))
+        canvas.paste(layer,(0,round(top+dy)),layer)
+
+    def _render(self, index, seconds, samples, came_from=None):
+        base,card,accent,backdrop,words=self._static(index)
+        S=self.width; t=samples[-1][0]
+        if came_from is not None and samples[0][0]<self.TRANSITION:
+            p=min(1.,max(0.,t/self.TRANSITION)); ease=1-(1-p)**3
+            # The backdrop crossfades from the previous card (or, opening a video, brightens from dark).
+            old=self._static(came_from)[3] if came_from>=0 else Image.new('RGB',base.size,(0,0,0))
+            backdrop=Image.blend(old,backdrop,ease if came_from>=0 else .4+.6*ease)
+            # Old title lifts away first, the new one rises in behind it: never two titles on top of each other.
+            if came_from>=0:
+                out=min(1.,p/.4); self._words(backdrop,self._static(came_from)[4],1-out*out*(3-2*out),-self._s(14)*out)
+            rise=min(1.,max(0.,(p-.4)/.6)); rise=1-(1-rise)**3
+            self._words(backdrop,words,rise,self._s(18)*(1-rise))
+            # Only the covers travel, so only they are averaged across the shutter.
+            total=None
+            for sample_t,_ in samples:
+                layer=backdrop.copy(); self._covers(layer,index,came_from,min(1.,max(0.,sample_t/self.TRANSITION)))
+                data=np.asarray(layer,dtype=np.uint16); total=data if total is None else total+data
+            canvas=Image.fromarray(((total+len(samples)//2)//len(samples)).astype(np.uint8))
+        else:
+            canvas=base.copy(); ease=1.
+            # The cover breathes with the active clip's audio; it never leaves its own frame.
+            self._place(canvas,card,scale=1+.025*float(np.mean([np.mean(bars) for _,bars in samples])),key=index)
+        eq=sum(self._eq_alpha(bars) for _,bars in samples)/len(samples)
+        canvas.paste(accent,self.eq_box,self._mask(eq*ease))
+        fill=knob=0
+        for sample_t,_ in samples:
+            f,k=self._bar_alpha(sample_t,seconds); fill=fill+f; knob=knob+k
+        canvas.paste(accent,self.bar_box,self._mask(fill/len(samples)*ease))
+        canvas.paste(self.LIGHT,self.bar_box,self._mask(knob/len(samples)*ease))
         draw=ImageDraw.Draw(canvas)
-        tf=font(self._s(15),BOLD); elapsed=min(seconds,max(0,int(t))); ty=by+self._s(16)
-        draw.text((lo,ty),f'{elapsed//60}:{elapsed%60:02d}',font=tf,fill=self.SOFT)
+        tf=font(self._s(15),BOLD); elapsed=min(seconds,max(0,int(t))); ty=self.by+self._s(16)
+        draw.text((self.lo,ty),f'{elapsed//60}:{elapsed%60:02d}',font=tf,fill=self.SOFT)
         left=seconds-elapsed
-        draw.text((S-lo,ty),f'-{left//60}:{left%60:02d}',font=tf,fill=self.SOFT,anchor='ra')
+        draw.text((S-self.lo,ty),f'-{left//60}:{left%60:02d}',font=tf,fill=self.SOFT,anchor='ra')
         return canvas
 
 
@@ -220,31 +292,44 @@ async def render_segment(frames,segment,path,ffmpeg,fps=60):
     args=[ffmpeg,'-v','error','-y','-threads','1','-filter_threads','1',
           '-f','rawvideo','-pix_fmt','rgb24','-s',f'{frames.width}x{frames.height}','-r',str(fps),'-i','pipe:0',
           '-ss',str(segment.start),'-i',str(segment.audio),'-map','0:v:0','-map','1:a:0',
-          '-t',str(seconds),'-c:v','libx264','-preset','veryfast','-crf','20','-threads','1',
+          '-t',str(seconds),'-c:v','libx264','-preset','veryfast','-crf','20','-threads','2',
           '-pix_fmt','yuv420p','-c:a','aac','-b:a','128k','-ar','48000','-ac','2',
           '-af',f'atrim=duration={seconds},asetpts=PTS-STARTPTS,apad,atrim=duration={seconds},loudnorm=I=-16:TP=-1.5:LRA=11,afade=t=in:d=0.04,afade=t=out:st={seconds-.08}:d=0.08',
           '-movflags','+faststart',str(path)]
-    process=await spawn(*args,stdin=asyncio.subprocess.PIPE,stdout=asyncio.subprocess.DEVNULL,stderr=asyncio.subprocess.PIPE)
-    errors=asyncio.create_task(read_bounded(process.stderr))
-    async def feed():
-        smoother=BarSmoother(fps); previous=smoother.value.copy()
-        for frame in range(seconds*fps):
-            t=frame/fps
-            bars=smoother.step(audio_bars(segment.waveform,t)).copy()
-            image=await in_thread(frames.motion,segment.index,t,seconds,previous,bars,fps)
-            previous=bars
-            process.stdin.write(image.tobytes())
-            await process.stdin.drain()
-        process.stdin.close()
-        await process.wait()
-        await errors
-        if process.returncode: raise MediaError('FFmpeg could not encode canvas')
+    read_fd,write_fd=os.pipe()
     try:
-        await asyncio.wait_for(feed(),timeout=max(120,seconds*20))
+        process=await spawn(*args,stdin=read_fd,stdout=asyncio.subprocess.DEVNULL,stderr=asyncio.subprocess.PIPE)
+    except BaseException:
+        os.close(write_fd); raise
+    finally:
+        os.close(read_fd)
+    pipe=open(write_fd,'wb')
+    errors=asyncio.create_task(read_bounded(process.stderr))
+    halt=threading.Event()
+    def produce():
+        # Drawing and writing stay in one worker thread: no per-frame event-loop round trip, FFmpeg encodes in parallel.
+        smoother=BarSmoother(fps); previous=smoother.value.copy()
+        with pipe:
+            for frame in range(seconds*fps):
+                if halt.is_set(): return
+                t=frame/fps
+                bars=smoother.step(audio_bars(segment.waveform,t)).copy()
+                pipe.write(frames.motion(segment.index,t,seconds,previous,bars,fps,came_from=segment.came_from).tobytes())
+                previous=bars
+    producer=asyncio.create_task(asyncio.to_thread(produce))
+    try:
+        async with asyncio.timeout(max(120,seconds*20)):
+            await asyncio.shield(producer)
+            await process.wait()
+            await errors
+        if process.returncode: raise MediaError('FFmpeg could not encode canvas')
     except (BrokenPipeError,ConnectionResetError) as exc:
         raise MediaError('FFmpeg stopped accepting frames') from exc
     finally:
+        halt.set()
         await stop(process)
+        await asyncio.gather(producer,return_exceptions=True)
+        pipe.close()
         if not errors.done(): errors.cancel()
         await asyncio.gather(errors,return_exceptions=True)
 
@@ -256,7 +341,8 @@ async def render_movie(items,segments,directory,theme,ffmpeg,size=720,fps=60):
     parts=[]
     for number,segment in enumerate(segments):
         path=directory/f'segment-{number:03d}.mp4'
-        await render_segment(frames,segment,path,ffmpeg,fps)
+        came_from=segments[number-1].index if number else -1
+        await render_segment(frames,replace(segment,came_from=came_from),path,ffmpeg,fps)
         parts.append(path)
     output=await join_segments(parts,directory,ffmpeg)
     return Movie(output,frames.width,frames.height,sum(s.seconds for s in segments))

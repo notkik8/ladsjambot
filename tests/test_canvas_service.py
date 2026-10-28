@@ -30,8 +30,9 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
             return SimpleNamespace(path=path,source='YouTube',url=f'https://www.youtube.com/watch?v=demo{index}')
         def frames(items,theme):
             grids.append(len(items)); return SimpleNamespace(width=720,height=768)
+        self.came=[]
         async def encode(frames,segment,path,ffmpeg):
-            indices.append((segment.index,segment.seconds)); path.write_bytes(b'video')
+            indices.append((segment.index,segment.seconds)); self.came.append(segment.came_from); path.write_bytes(b'video')
         async def join(parts,folder,ffmpeg):
             output=folder/'canvas.mp4'; output.write_bytes(b'combined')
             for p in parts: p.unlink()
@@ -63,6 +64,12 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
         _,message,indices,_,_,_=await self.exercise(count=5)
         self.assertEqual(indices,[(i,6) for i in range(5)])
         self.assertEqual([call.kwargs['duration'] for call in message.reply_video.call_args_list],[24,6])
+        # Each video opens fresh; inside a video every clip slides in from the one before it.
+        self.assertEqual(self.came,[-1,0,1,2,-1])
+
+    async def test_transition_skips_missing_card(self):
+        await self.exercise(missing=(1,))
+        self.assertEqual(self.came,[-1,0])
 
     async def test_upload_failure_cleans_all_temp_media(self):
         service,_,_,_,_,_=await self.exercise(fail_upload=True)

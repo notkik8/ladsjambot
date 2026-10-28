@@ -50,3 +50,14 @@ class RenderTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(a.size,b.size)
         self.assertNotEqual(a.tobytes(),b.tobytes())
         self.assertEqual(frames.count,3)
+
+    def test_transition_only_at_clip_start(self):
+        frames=CanvasFrames([track(1,'red'),track(2,'blue')],DEFAULT,size=320)
+        bars=np.full(16,.5)
+        steady=frames.frame(1,0,6,bars).tobytes()
+        self.assertNotEqual(frames.frame(1,0,6,bars,came_from=0).tobytes(),steady)
+        self.assertNotEqual(frames.frame(1,0,6,bars,came_from=-1).tobytes(),steady)
+        late=frames.TRANSITION+.1
+        self.assertEqual(frames.frame(1,late,6,bars,came_from=0).tobytes(),frames.frame(1,late,6,bars).tobytes())
+        blurred=frames.motion(1,.2,6,np.zeros(16),bars,60,came_from=0)
+        self.assertEqual(blurred.size,(320,320))
