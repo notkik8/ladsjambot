@@ -1,6 +1,6 @@
 import unittest
 import numpy as np
-from bot.canvas.resolver import rank_candidate
+from bot.canvas.resolver import deezer_candidates, itunes_candidates, preview_url, rank_candidate
 from bot.canvas.analysis import Features, choose_excerpt
 
 
@@ -55,3 +55,31 @@ class ExcerptTests(unittest.TestCase):
     def test_partial_duration_does_not_overrun(self):
         f=Features(np.ones(16),np.zeros(16),np.zeros(16),np.zeros(16),15.3)
         self.assertLessEqual(choose_excerpt(f,15)+15,15.3)
+
+
+class PreviewTests(unittest.TestCase):
+    def test_deezer_and_itunes_entries_rank_like_other_sources(self):
+        deezer={'data':[{'title':'Blinding Lights','artist':{'name':'The Weeknd'},'duration':200,
+                         'preview':'https://cdnt-preview.dzcdn.net/api/1/1/a/b/c/0/x.mp3','link':'https://www.deezer.com/track/1'},
+                        {'title':'Blinding Lights (Remix)','artist':{'name':'The Weeknd'},'duration':210,'preview':'https://cdnt-preview.dzcdn.net/r.mp3'},
+                        {'title':'No preview','artist':{'name':'The Weeknd'},'duration':200,'preview':''}]}
+        rows=list(deezer_candidates(deezer))
+        self.assertEqual(len(rows),2)
+        self.assertGreaterEqual(rank_candidate('The Weeknd','Blinding Lights',rows[0][0],200),.8)
+        self.assertEqual(rank_candidate('The Weeknd','Blinding Lights',rows[1][0],200),0)
+        itunes={'results':[{'trackName':'Космос','artistName':'Скриптонит','trackTimeMillis':180000,
+                            'previewUrl':'https://audio-ssl.itunes.apple.com/p.m4a','trackViewUrl':'https://music.apple.com/x'}]}
+        meta,url,link,source=next(itunes_candidates(itunes))
+        self.assertEqual((meta['duration'],source),(180,'Apple Music'))
+        self.assertGreaterEqual(rank_candidate('Скриптонит','Космос',meta),.8)
+
+    def test_only_https_store_preview_hosts(self):
+        self.assertTrue(preview_url('https://cdnt-preview.dzcdn.net/a.mp3'))
+        self.assertTrue(preview_url('https://audio-ssl.itunes.apple.com/a.m4a'))
+        for bad in ('http://cdnt-preview.dzcdn.net/a.mp3','https://evil.example/dzcdn.net','https://dzcdn.net.evil.example/a','https://u@cdnt-preview.dzcdn.net/a'):
+            self.assertFalse(preview_url(bad),bad)
+
+    def test_preview_excerpt_may_start_at_the_hook(self):
+        energy=np.ones(28); vocals=np.zeros(28); vocals[:15]=.9
+        features=Features(energy,vocals,np.zeros(28),np.zeros(28),28)
+        self.assertEqual(choose_excerpt(features,15,edges=False),0)

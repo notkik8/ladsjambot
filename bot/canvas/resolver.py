@@ -1,5 +1,7 @@
 import json
 import re
+import time
+from collections import OrderedDict
 import shutil
 import sys
 import unicodedata
@@ -7,6 +9,8 @@ from dataclasses import dataclass
 from difflib import SequenceMatcher
 from pathlib import Path
 from urllib.parse import urlparse
+
+import aiohttp
 
 from .process import MediaError, run
 
@@ -72,10 +76,83 @@ class ResolvedAudio:
     path: Path
     url: str
     source: str
+    preview: bool = False  # 30-second store preview: already the hook, no intro/outro to skip
+
+
+PREVIEW_HOSTS=('.dzcdn.net','.apple.com','.mzstatic.com')
+# Small LRU of preview bytes (30 s ≈ 0.5 MB) plus short-lived misses, so repeated canvases skip the network.
+_previews=OrderedDict(); _misses={}
+
+
+def preview_url(value):
+    try:
+        parsed=urlparse(value)
+        host=(parsed.hostname or '').lower()
+        return parsed.scheme=='https' and not parsed.username and parsed.port in (None,443) and host.endswith(PREVIEW_HOSTS)
+    except (ValueError,TypeError): return False
+
+
+def deezer_candidates(data):
+    for entry in (data or {}).get('data') or []:
+        if not isinstance(entry,dict) or not entry.get('preview'): continue
+        yield dict(title=entry.get('title'),track=entry.get('title'),artist=(entry.get('artist') or {}).get('name'),
+                   duration=entry.get('duration')),entry['preview'],entry.get('link') or 'https://www.deezer.com','Deezer'
+
+
+def itunes_candidates(data):
+    for entry in (data or {}).get('results') or []:
+        if not isinstance(entry,dict) or not entry.get('previewUrl'): continue
+        seconds=entry.get('trackTimeMillis')
+        yield dict(title=entry.get('trackName'),track=entry.get('trackName'),artist=entry.get('artistName'),
+                   duration=seconds/1000 if isinstance(seconds,(int,float)) else None),entry['previewUrl'],entry.get('trackViewUrl') or 'https://music.apple.com','Apple Music'
+
+
+async def preview_audio(artist, title, directory: Path, duration=None):
+    """Licensed 30-second previews: one small HTTPS request each instead of searching and downloading whole tracks."""
+    key=(' '.join(words(artist)),' '.join(words(title)))
+    if key in _previews:
+        _previews.move_to_end(key); data,url,source,suffix=_previews[key]
+        path=directory/f'preview{suffix}'; path.write_bytes(data)
+        return ResolvedAudio(path,url,source,True)
+    if time.monotonic()-_misses.get(key,-1e9)<600: return None
+    query=f'{artist} {without_credits(title)}'
+    searches=(('https://api.deezer.com/search',dict(q=query,limit='10'),deezer_candidates),
+              ('https://itunes.apple.com/search',dict(term=query,media='music',entity='song',limit='10'),itunes_candidates))
+    timeout=aiohttp.ClientTimeout(total=15,sock_connect=5,sock_read=8)
+    async with aiohttp.ClientSession(timeout=timeout,headers={'User-Agent':'ladsjam-canvas/1.0'}) as session:
+        for endpoint,params,parse in searches:
+            try:
+                async with session.get(endpoint,params=params) as response:
+                    if response.status!=200: continue
+                    data=json.loads(await response.read())
+                ranked=sorted(((rank_candidate(artist,title,meta,duration),url,link,source) for meta,url,link,source in parse(data)),
+                              key=lambda row:row[0],reverse=True)
+                for score,url,link,source in ranked[:2]:
+                    if score<.80 or not preview_url(url): break
+                    async with session.get(url) as response:
+                        if response.status!=200: continue
+                        body=bytearray()
+                        async for chunk in response.content.iter_chunked(65536):
+                            body+=chunk
+                            if len(body)>5*1024*1024: break
+                        body=bytes(body)
+                    if not 10_000<len(body)<=5*1024*1024: continue
+                    suffix='.m4a' if source=='Apple Music' else '.mp3'
+                    path=directory/f'preview{suffix}'; path.write_bytes(body)
+                    _previews[key]=(body,link,source,suffix)
+                    while len(_previews)>48: _previews.popitem(last=False)
+                    return ResolvedAudio(path,link,source,True)
+            except (aiohttp.ClientError,TimeoutError,ValueError):
+                continue
+    _misses[key]=time.monotonic()
+    if len(_misses)>512: _misses.clear()
+    return None
 
 
 async def resolve_audio(artist, title, directory: Path, duration=None):
     directory.mkdir(parents=True,exist_ok=True)
+    found=await preview_audio(artist,title,directory,duration)
+    if found: return found
     base=[sys.executable,'-m','yt_dlp','--ignore-config','--no-playlist','--no-warnings','--socket-timeout','12','--retries','1','--extractor-retries','1']
     if shutil.which('node'): base += ['--js-runtimes','node']
     candidates=[]

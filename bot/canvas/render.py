@@ -41,7 +41,7 @@ class CanvasFrames:
         self.layout=self.SOLO if self.count==1 else self.GROUP
         self.thumb=self._s(52)
         self.thumbs=[self._square(self._cover(item),self.thumb) for item in items]
-        self._cached=None
+        self._cached=None; self._cards={}
 
     def _s(self, value): return max(1,round(value*self.u))
 
@@ -124,7 +124,7 @@ class CanvasFrames:
         ImageDraw.Draw(overlay).rounded_rectangle((lo,by,S-lo,by+self._s(6)),radius=self._s(3),fill=(255,255,255,60))
         if self.count>1: self._strip(overlay,index,accent)
         canvas=Image.alpha_composite(canvas,overlay).convert('RGB')
-        self._cached=(index,canvas,self._rounded(card,radius),accent)
+        self._cached=(index,canvas,self._rounded(card,radius),accent); self._cards={}
         return self._cached[1:]
 
     def _strip(self, overlay, index, accent):
@@ -139,51 +139,57 @@ class CanvasFrames:
             if i==index: draw.rounded_rectangle((x-3,y-3,x+t+2,y+t+2),radius=self._s(12),outline=accent,width=3)
             x+=t+gap
 
-    def _shapes(self, canvas, box, fill, draw, ss=4):
-        """Antialiased shapes: draw into a supersampled mask for the box, then paste the colour through it."""
-        x0,y0,x1,y1=box
-        mask=Image.new('L',((x1-x0)*ss,(y1-y0)*ss),0)
-        draw(ImageDraw.Draw(mask),lambda x,y:((x-x0)*ss,(y-y0)*ss),ss)
-        canvas.paste(fill,box,mask.resize((x1-x0,y1-y0),Image.Resampling.BOX))
+    def _shapes(self, canvas, box, fill, draw, samples, ss=4):
+        """Antialiased, motion-blurred shapes: average every sub-frame's supersampled mask, paste the colour through it."""
+        x0,y0,x1,y1=box; size=(x1-x0,y1-y0)
+        total=np.zeros((size[1],size[0]),dtype=np.float32)
+        for sample in samples:
+            mask=Image.new('L',(size[0]*ss,size[1]*ss),0)
+            draw(ImageDraw.Draw(mask),lambda x,y:((x-x0)*ss,(y-y0)*ss),ss,sample)
+            total+=np.asarray(mask.resize(size,Image.Resampling.BOX),dtype=np.float32)
+        canvas.paste(fill,box,Image.fromarray((total/len(samples)+.5).astype(np.uint8)))
+
+    def _pulsed(self, card, w):
+        # The pulse only spans a few pixel sizes, so each scaled cover is made once per clip.
+        if w not in self._cards: self._cards[w]=card.resize((w,w),Image.Resampling.BICUBIC)
+        return self._cards[w]
 
     def frame(self, index, t, seconds, bars):
+        return self._render(index,seconds,[(t,np.asarray(bars,dtype=np.float32))])
+
+    def motion(self, index, t, seconds, previous, bars, fps, samples=4):
+        """Motion-blurred frame: moving shapes are averaged across a 180-degree shutter."""
+        previous=np.asarray(previous,dtype=np.float32); bars=np.asarray(bars,dtype=np.float32)
+        steps=[(k+1)/samples for k in range(samples)]
+        return self._render(index,seconds,[(t-.5*(1-a)/fps,previous+(bars-previous)*a) for a in steps])
+
+    def _render(self, index, seconds, samples):
         base,card,accent=self._static(index)
-        S=self.width; L=self.layout
+        S=self.width; L=self.layout; t=samples[-1][0]
         canvas=base.copy()
         cs=card.width; cx=(S-cs)//2; cy=self._s(L['top'])
         # The cover breathes with the active clip's audio; it never leaves its own frame.
-        w=round(cs*(1+.025*float(np.mean(bars))))
-        pulsed=card.resize((w,w),Image.Resampling.BICUBIC)
+        w=round(cs*(1+.025*float(np.mean([np.mean(bars) for _,bars in samples]))))
+        pulsed=self._pulsed(card,w)
         canvas.paste(pulsed,(cx-(w-cs)//2,cy-(w-cs)//2),pulsed)
-        count=len(bars); bw=self._s(12); gap=self._s(8); x0=(S-(count*bw+(count-1)*gap))//2
+        count=len(samples[-1][1]); bw=self._s(12); gap=self._s(8); x0=(S-(count*bw+(count-1)*gap))//2
         mid=self._s(L['eq']); half=self._s(L['eq_h'])
-        def sticks(draw,pt,ss):
-            for j,value in enumerate(bars):
+        def sticks(draw,pt,ss,sample):
+            for j,value in enumerate(sample[1]):
                 h=max(self._s(3),float(value)*half); x=x0+j*(bw+gap)
                 draw.rounded_rectangle((*pt(x,mid-h),*pt(x+bw,mid+h)),radius=bw*ss/2,fill=255)
-        self._shapes(canvas,(x0-2,mid-half-3,x0+count*(bw+gap)+2,mid+half+4),accent,sticks)
-        by=self._s(L['bar']); lo=self._s(60); span=S-2*lo; done=min(1,(t+1/24)/seconds)
-        end=lo+max(self._s(6),span*done); knob=self._s(7); thick=self._s(6)
+        self._shapes(canvas,(x0-2,mid-half-3,x0+count*(bw+gap)+2,mid+half+4),accent,sticks,samples)
+        by=self._s(L['bar']); lo=self._s(60); span=S-2*lo; knob=self._s(7); thick=self._s(6)
+        def end(sample): return lo+max(self._s(6),span*min(1,(sample[0]+1/24)/seconds))
         box=(lo-2,by+thick//2-knob-2,S-lo+knob+2,by+thick//2+knob+3)
-        self._shapes(canvas,box,accent,lambda draw,pt,ss:draw.rounded_rectangle((*pt(lo,by),*pt(end,by+thick)),radius=thick*ss/2,fill=255))
-        self._shapes(canvas,box,self.LIGHT,lambda draw,pt,ss:draw.ellipse((*pt(end-knob,by+thick/2-knob),*pt(end+knob,by+thick/2+knob)),fill=255))
+        self._shapes(canvas,box,accent,lambda draw,pt,ss,sample:draw.rounded_rectangle((*pt(lo,by),*pt(end(sample),by+thick)),radius=thick*ss/2,fill=255),samples)
+        self._shapes(canvas,box,self.LIGHT,lambda draw,pt,ss,sample:draw.ellipse((*pt(end(sample)-knob,by+thick/2-knob),*pt(end(sample)+knob,by+thick/2+knob)),fill=255),samples)
         draw=ImageDraw.Draw(canvas)
-        tf=font(self._s(15),BOLD); elapsed=min(seconds,int(t)); ty=by+self._s(16)
+        tf=font(self._s(15),BOLD); elapsed=min(seconds,max(0,int(t))); ty=by+self._s(16)
         draw.text((lo,ty),f'{elapsed//60}:{elapsed%60:02d}',font=tf,fill=self.SOFT)
         left=seconds-elapsed
         draw.text((S-lo,ty),f'-{left//60}:{left%60:02d}',font=tf,fill=self.SOFT,anchor='ra')
         return canvas
-
-    def motion(self, index, t, seconds, previous, bars, fps, samples=4):
-        """Motion-blurred frame: average sub-frames across a 180-degree shutter."""
-        previous=np.asarray(previous,dtype=np.float32); bars=np.asarray(bars,dtype=np.float32)
-        total=None
-        for k in range(samples):
-            a=(k+1)/samples
-            image=self.frame(index,t-.5*(1-a)/fps,seconds,previous+(bars-previous)*a)
-            data=np.asarray(image,dtype=np.float32)
-            total=data if total is None else total+data
-        return Image.fromarray((total/samples+.5).astype(np.uint8))
 
 
 class BarSmoother:

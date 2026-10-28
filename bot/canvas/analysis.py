@@ -2,6 +2,7 @@
 from dataclasses import dataclass
 from pathlib import Path
 import hashlib
+import threading
 import zipfile
 import numpy as np
 
@@ -20,7 +21,7 @@ class Features:
     duration: float
 
 
-def choose_excerpt(features: Features, seconds: int) -> float:
+def choose_excerpt(features: Features, seconds: int, edges=True) -> float:
     f=features
     if f.duration < seconds or not len(f.energy) or float(np.max(f.energy)) < 1e-5:
         raise ValueError('Audio is silent or too short')
@@ -37,7 +38,7 @@ def choose_excerpt(features: Features, seconds: int) -> float:
             score+=1.5*np.clip(f.vocals[sl]/.5,0,1).mean()
             score-=.35*float(f.vocals[start]<.1)
         # Mild intro/outro penalty, never exclude a chorus that starts immediately.
-        score-=.12*float(start<8 or start+seconds>f.duration-5)
+        if edges: score-=.12*float(start<8 or start+seconds>f.duration-5)
         score+=.04*float(f.onset[start])
         scores.append((score,start))
     if not scores: raise ValueError('No non-silent excerpt')
@@ -48,6 +49,7 @@ class Analyser:
     def __init__(self, model_path: Path):
         self.model_path=model_path
         self.interpreter=None
+        self.busy=threading.Lock()  # one interpreter, tracks are prepared concurrently
 
     def _load(self):
         if self.interpreter is not None: return
@@ -64,6 +66,9 @@ class Analyser:
         self.voice_ids=[i for i,name in enumerate(labels) if name in {'Singing','Choir','Rapping','Chant','Child singing','Synthetic singing'}]
 
     def features(self, pcm: Path):
+        with self.busy: return self._features(pcm)
+
+    def _features(self, pcm: Path):
         self._load()
         samples=np.memmap(pcm,dtype='<f4',mode='r')
         try:
@@ -103,11 +108,14 @@ class Analyser:
             samples._mmap.close()
 
 
-async def analyse_audio(audio: Path, directory: Path, analyser: Analyser, ffmpeg: str, seconds: int):
+async def analyse_audio(audio: Path, directory: Path, analyser: Analyser, ffmpeg: str, seconds: int, preview=False):
     pcm=directory/'analysis.f32'
     await run([ffmpeg,'-v','error','-nostdin','-y','-i',audio,'-t','600','-vn','-ac','1','-ar',str(SR),'-f','f32le',pcm],timeout=45)
     features=await in_thread(analyser.features,pcm)
-    start=choose_excerpt(features,seconds)
+    if preview:
+        # Store previews fade out over their last second; the preview itself is the song's hook.
+        features.duration=max(0,features.duration-1.5)
+    start=choose_excerpt(features,seconds,edges=not preview)
     # Snap at most half a second to a nearby rising energy edge; keep exact clip length.
     samples=np.memmap(pcm,dtype='<f4',mode='r')
     try:

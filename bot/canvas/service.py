@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 from html import escape
 import logging
 from pathlib import Path
+import shutil
 import tempfile
 import time
 
@@ -17,6 +18,14 @@ log=logging.getLogger(__name__)
 
 
 class CanvasBusy(MediaError): pass
+
+
+async def track_seconds(lastfm,item):
+    try:
+        info=await lastfm.call('track.getInfo',retries=0,artist=item.artist,track=item.track)
+        return float((info or {}).get('track',{}).get('duration',0))/1000 or None
+    except (ValueError,TypeError,AttributeError):
+        return None
 
 
 class CanvasService:
@@ -86,30 +95,41 @@ class CanvasService:
                 if sent.video: saved.append(dict(entry,video=sent.video.file_id))
                 output.unlink(); output_dir.rmdir()
                 part_number+=1; parts=[]; captions=[]
-            for i,item in enumerate(items):
-                # Download, decode and encode only ONE source at a time, then remove it.
-                try:
-                    with tempfile.TemporaryDirectory(prefix=f'audio-{i}-',dir=root) as audio_folder:
-                        directory=Path(audio_folder)
-                        async with asyncio.timeout(180):
-                            info=await lastfm.call('track.getInfo',retries=0,artist=item.artist,track=item.track)
-                            try: duration=float((info or {}).get('track',{}).get('duration',0))/1000 or None
-                            except (ValueError,TypeError,AttributeError): duration=None
+            # Audio for every participant is fetched and analysed ahead (bounded), while clips encode in order.
+            gate=asyncio.Semaphore(3)
+            async def prepare(i,item):
+                async with gate:
+                    directory=root/f'audio-{i:03d}'; directory.mkdir()
+                    try:
+                        async with asyncio.timeout(150):
+                            duration=await track_seconds(lastfm,item)
                             audio=await resolve_audio(item.artist,item.track,directory/'download',duration)
-                            start,pcm=await analyse_audio(audio.path,directory,self.analyser,self.ffmpeg,seconds)
-                            path=root/f'clip-{i:03d}.mp4'
+                            start,pcm=await analyse_audio(audio.path,directory,self.analyser,self.ffmpeg,seconds,preview=getattr(audio,'preview',False))
+                        return directory,audio,start,pcm
+                    except BaseException:
+                        shutil.rmtree(directory,ignore_errors=True); raise
+            jobs=[asyncio.create_task(prepare(i,item)) for i,item in enumerate(items)]
+            try:
+                for i,(item,job) in enumerate(zip(items,jobs)):
+                    try:
+                        directory,audio,start,pcm=await job
+                        path=root/f'clip-{i:03d}.mp4'
+                        try:
                             await render_segment(frames,Segment(i,audio.path,start,seconds,pcm),path,self.ffmpeg)
-                            del pcm
-                            source=audio.source; url=audio.url
-                    parts.append(path)
-                    name=escape(item.tg_name[:32]); title=escape(f'{item.artist} — {item.track}'[:70])
-                    captions.append(f'{i+1}. {name}: {title} · <a href="{escape(url,quote=True)}">{source}</a>')
-                except (MediaError,TimeoutError,ValueError,OSError) as exc:
-                    log.warning('Canvas track %s skipped (%s)',i,type(exc).__name__)
-                    (root/f'clip-{i:03d}.mp4').unlink(missing_ok=True)
-                    skipped.append(item.tg_name)
-                # Four entries keep source links/captions comfortably under Telegram's limit.
-                if len(parts)==4: await flush()
+                        finally:
+                            shutil.rmtree(directory,ignore_errors=True); del pcm
+                        parts.append(path)
+                        name=escape(item.tg_name[:32]); title=escape(f'{item.artist} — {item.track}'[:70])
+                        captions.append(f'{i+1}. {name}: {title} · <a href="{escape(audio.url,quote=True)}">{audio.source}</a>')
+                    except (MediaError,TimeoutError,ValueError,OSError) as exc:
+                        log.warning('Canvas track %s skipped (%s)',i,type(exc).__name__)
+                        (root/f'clip-{i:03d}.mp4').unlink(missing_ok=True)
+                        skipped.append(item.tg_name)
+                    # Four entries keep source links/captions comfortably under Telegram's limit.
+                    if len(parts)==4: await flush()
+            finally:
+                for job in jobs: job.cancel()
+                await asyncio.gather(*jobs,return_exceptions=True)
             await flush()
             if not saved: raise MediaError('No confident audio found for any track')
         notice=('Аудио не найдено: '+escape(', '.join(skipped)[:700])+'. Карточки оставлены, их очередь пропущена.') if skipped else None
