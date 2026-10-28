@@ -60,12 +60,34 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
         _,message,indices,_,_,_=await self.exercise(missing=(0,1,2))
         self.assertFalse(indices); message.reply_video.assert_not_awaited()
 
-    async def test_group_splits_without_losing_people(self):
+    async def test_whole_group_shares_one_video(self):
         _,message,indices,_,_,_=await self.exercise(count=5)
         self.assertEqual(indices,[(i,6) for i in range(5)])
-        self.assertEqual([call.kwargs['duration'] for call in message.reply_video.call_args_list],[24,6])
-        # Each video opens fresh; inside a video every clip slides in from the one before it.
-        self.assertEqual(self.came,[-1,0,1,2,-1])
+        self.assertEqual([call.kwargs['duration'] for call in message.reply_video.call_args_list],[30])
+        # The video opens fresh; every later clip slides in from the one before it.
+        self.assertEqual(self.came,[-1,0,1,2,3])
+        caption=message.reply_video.call_args.kwargs['caption']
+        for n in range(1,6): self.assertIn(f'{n}. user{n-1}: Artist — Song{n-1}',caption)
+        self.assertNotIn('href',caption)
+
+    async def test_group_splits_only_near_upload_limit(self):
+        # Each fake clip is 5 bytes: a 14-byte budget fits two clips per video.
+        with patch('bot.canvas.service.PART_BYTES',14):
+            _,message,indices,_,_,_=await self.exercise(count=5)
+        self.assertEqual(indices,[(i,6) for i in range(5)])
+        self.assertEqual([call.kwargs['duration'] for call in message.reply_video.call_args_list],[12,12,6])
+        self.assertEqual(self.came,[-1,0,-1,2,-1])
+
+    async def test_long_track_list_moves_below_video(self):
+        service,message,_,_,items,lastfm=await self.exercise(count=40)
+        self.assertEqual(message.reply_video.await_count,1)
+        self.assertLessEqual(len(message.reply_video.call_args.kwargs['caption']),1024)
+        listed='\n'.join(call.args[0] for call in message.reply.call_args_list)
+        for n in range(40): self.assertIn(f'user{n}:',listed)
+        message.reply.reset_mock(); message.reply_video.reset_mock()
+        await service.send(message,items,DEFAULT,solo=False,lastfm=lastfm)
+        self.assertEqual(message.reply_video.call_args.kwargs['video'],'cached-video')
+        self.assertIn('user39:','\n'.join(call.args[0] for call in message.reply.call_args_list))
 
     async def test_transition_skips_missing_card(self):
         await self.exercise(missing=(1,))
