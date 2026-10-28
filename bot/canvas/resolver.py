@@ -10,12 +10,20 @@ from urllib.parse import urlparse
 
 from .process import MediaError, run
 
-VERSIONS={'remix','live','cover','karaoke','instrumental','slowed','sped','nightcore','reverb','acoustic','concert','tribute'}
+VERSIONS={'remix','live','cover','karaoke','instrumental','slowed','sped','nightcore','reverb','acoustic','concert','tribute','acapella','acappella','акапелла'}
 NOISE={'official','audio','video','lyrics','lyric','hd','hq','visualizer','mv','music','topic'}
 
 
 def words(value):
     return re.findall(r'\w+', unicodedata.normalize('NFKC', str(value or '')).casefold())
+
+
+def without_credits(value):
+    text=str(value or '')
+    # Credits are not a different recording version. Version checks still use
+    # the original title, so this cannot admit an unwanted remix or cover.
+    text=re.sub(r'[\(\[]\s*(?:feat\.?|ft\.?|prod\.?|produced by)\s+[^\)\]]*[\)\]]',' ',text,flags=re.I)
+    return re.sub(r'\s+(?:feat\.|ft\.|prod\.|produced by)\s+.*$','',text,flags=re.I)
 
 
 def rank_candidate(artist, title, candidate, duration=None):
@@ -28,8 +36,13 @@ def rank_candidate(artist, title, candidate, duration=None):
     if (raw & VERSIONS) != (t & VERSIONS): return 0.
     identity=raw | set(words(candidate.get('artist'))) | set(words(candidate.get('uploader'))) | set(words(candidate.get('channel')))
     if not a or len(a & identity)/len(a) < .8: return 0.
-    wanted=t-NOISE or t
-    found_raw=set(words(candidate.get('track'))) or raw
+    clean_title=set(words(without_credits(title)))
+    wanted=clean_title-NOISE or clean_title
+    recording=without_credits(candidate.get('track') or candidate.get('title'))
+    prefix=re.split(r'\s+[-−–—]\s+',recording,maxsplit=1)
+    if len(prefix)==2 and len(a & set(words(prefix[0])))/len(a)>=.8:
+        recording=prefix[1]
+    found_raw=set(words(recording))
     # SoundCloud's track can contain the whole upload title. Preserve words
     # shared by the artist and song, e.g. The Weeknd / The Hills.
     found=found_raw-(a-wanted)-(NOISE-wanted)

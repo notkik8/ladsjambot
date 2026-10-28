@@ -54,8 +54,8 @@ class CanvasFrames:
         draw=ImageDraw.Draw(canvas)
         draw.rounded_rectangle((x+2,y+2,x+self.cell-3,y+self.cell-3),radius=max(3,self.cell//40),outline=self.accent,width=3)
         # Bars respond only to the active clip's PCM, never to other participants.
-        bw=max(2,self.cell//80); gap=bw; count=len(bars)
-        bx=x+(self.cell-count*(bw+gap))//2; by=y+max(22,self.cell//9)
+        bw=max(1,self.cell//160); gap=max(1,bw//2); count=len(bars)
+        bx=x+self.cell-count*(bw+gap)-12; by=y+max(22,self.cell//9)
         draw.rounded_rectangle((bx-6,y+8,bx+count*(bw+gap)+6,by+5),radius=5,fill=(16,13,25))
         for j,value in enumerate(bars):
             h=max(2,round(float(value)*max(8,self.cell//12)))

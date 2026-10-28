@@ -5,6 +5,16 @@ from bot.canvas.analysis import Features, choose_excerpt
 
 
 class MatchingTests(unittest.TestCase):
+    def test_artist_words_shared_with_title_and_soundcloud_raw_track(self):
+        self.assertGreater(rank_candidate('The Weeknd','The Hills',{'title':'The Weeknd - The Hills (Official Audio)','duration':240}),.8)
+        self.assertGreater(rank_candidate('Daft Punk','Get Lucky',{'title':'Daft Punk - Get Lucky','track':'Daft Punk - Get Lucky','duration':248}),.8)
+
+    def test_credited_producer_and_featured_artist(self):
+        self.assertGreater(rank_candidate('ROCKET','инкассатор',{'title':'ROCKET − Инкассатор (prod. by FRESCO)','duration':150}),.8)
+        self.assertGreater(rank_candidate('LILDRUGHILL','терминал',{'title':'Терминал (feat. ROCKET)','channel':'LILDRUGHILL','duration':162}),.8)
+        self.assertGreater(rank_candidate('Freddie Gibbs','Feeling',{'title':'Freddie Gibbs & The Alchemist - "Feeling (feat. Larry June)" (Official Visualizer)','duration':236}),.8)
+        self.assertEqual(rank_candidate('ROCKET','инкассатор',{'title':'ROCKET − Инкассатор (remix) (prod. by FRESCO)','duration':150}),0)
+
     def test_official_song_beats_cover_and_remix(self):
         good = {'title': 'Artist - My Song (Official Audio)', 'uploader': 'Artist - Topic', 'duration': 180}
         self.assertGreater(rank_candidate('Artist', 'My Song', good, 180), .8)
