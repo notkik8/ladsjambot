@@ -11,6 +11,9 @@ class Config:
     LASTFM_API_KEY: str = os.getenv("LASTFM_API_KEY", "")
     LASTFM_SHARED_SECRET: str = os.getenv("LASTFM_SHARED_SECRET", "")
     DB_PATH: str = os.getenv("DB_PATH", "bot.db")
+    CANVAS_MODEL_PATH: str = os.getenv("CANVAS_MODEL_PATH", ".cache/canvas_models/yamnet.tflite")
+    CANVAS_FFMPEG: str = os.getenv("CANVAS_FFMPEG", "ffmpeg")
+    CANVAS_TEMP_DIR: str | None = os.getenv("CANVAS_TEMP_DIR") or None
     LASTFM_API_URL: str = os.getenv("LASTFM_API_URL", "https://ws.audioscrobbler.com/2.0/")
     USER_AGENT: str = os.getenv(
         "USER_AGENT",

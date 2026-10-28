@@ -10,6 +10,8 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libfreetype6 \
     libjpeg62-turbo \
+    ffmpeg \
+    nodejs \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Python requirements
@@ -19,6 +21,7 @@ RUN pip install --no-cache-dir --upgrade pip && \
 
 # Copy application source code and assets
 COPY . .
+RUN python scripts/install_canvas_model.py
 
 # Run the Telegram bot
 CMD ["python", "main.py"]
