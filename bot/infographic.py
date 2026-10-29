@@ -856,7 +856,7 @@ def _rows_h(n: int, sub: bool) -> int:
 
 
 # ---- public renderers --------------------------------------------------------
-def _stats_ranking(sh: Sheet, x: int, y: int, width: int, title: str, rows: Sequence[Row]) -> int:
+def _stats_ranking(sh: Sheet, x: int, y: int, width: int, title: str, rows: Sequence[Row], highlight: Optional[int] = None) -> int:
     """Half-width ranking panel for the compact listening report."""
     height = 80 + max(len(rows), 1) * 92 + 16
     sh.panel(x, y, x + width, y + height, 28)
@@ -867,6 +867,8 @@ def _stats_ranking(sh: Sheet, x: int, y: int, width: int, title: str, rows: Sequ
     for i, (label, sub, val) in enumerate(rows):
         ry = y + 80 + i * 92
         col = sh.pal[i % len(sh.pal)]
+        if i == highlight:
+            sh.rrect(x + 8, ry + 2, x + width - 8, ry + 88, 12, outline=col, width=4)
         sh.text(x + 24, ry + 25, str(i + 1), 26, sh.fg(col), fonts.BLACK)
         value = f"{val:,}".replace(",", " ")
         vw = sh.measure(value, 28, fonts.BLACK)
@@ -879,7 +881,8 @@ def _stats_ranking(sh: Sheet, x: int, y: int, width: int, title: str, rows: Sequ
     return y + height
 
 
-def render_stats(st: ListeningStats, covers: Sequence[Optional[bytes]] = (), theme: Theme = DEFAULT) -> io.BytesIO:
+def render_stats(st: ListeningStats, covers: Sequence[Optional[bytes]] = (), theme: Theme = DEFAULT,
+                 highlight_track: Optional[int] = None) -> io.BytesIO:
     hero_h = _hero_h(theme, 280)
     charts_y = hero_h + 36 + 20 + 2 * 210 + 24
     ranks_y = charts_y + 390
@@ -913,7 +916,7 @@ def render_stats(st: ListeningStats, covers: Sequence[Optional[bytes]] = (), the
     peak = max(range(24), key=lambda h: st.per_hour[h]) if st.total else 0
     sh.text(right_x, charts_y + 354, f"Пик активности: {peak:02d}:00", 23, sh.t.muted)
     _stats_ranking(sh, PAD, ranks_y, panel_w, "ТОП АРТИСТОВ", st.top_artists)
-    _stats_ranking(sh, right_x, ranks_y, panel_w, "ТОП ТРЕКОВ", st.top_tracks)
+    _stats_ranking(sh, right_x, ranks_y, panel_w, "ТОП ТРЕКОВ", st.top_tracks, highlight_track)
     _footer(sh, ranks_y + rank_h + 24, "выборка ограничена" if st.truncated else "")
     return sh.export()
 

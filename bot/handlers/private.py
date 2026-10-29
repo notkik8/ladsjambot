@@ -129,6 +129,7 @@ async def cmd_help(message: Message) -> None:
         "• <code>/canvas</code> или <code>canvas</code> — 15 секунд твоего текущего трека\n\n"
         "<b>Статистика (в ЛС и в группе):</b>\n"
         "• <code>/stats [дней]</code> — инфографика прослушиваний (по умолчанию 7, макс. 30)\n"
+        "• <code>/vidstats [дней]</code> или <code>vidstats [дней]</code> — видео статистики с топом треков\n"
         "• <code>/top [7d|1m|3m|6m|12m|all] [albums|artists|tracks]</code> — ваши топы\n"
         "• <code>/recent</code> — последние 10 треков\n"
         "• <code>/compat @ник</code> — музыкальная совместимость\n"
