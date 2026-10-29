@@ -1,3 +1,4 @@
+import asyncio
 import json
 import re
 import time
@@ -151,38 +152,50 @@ async def preview_audio(artist, title, directory: Path, duration=None):
 
 async def resolve_audio(artist, title, directory: Path, duration=None):
     directory.mkdir(parents=True,exist_ok=True)
-    found=await preview_audio(artist,title,directory,duration)
-    if found: return found
     base=[sys.executable,'-m','yt_dlp','--ignore-config','--no-playlist','--no-warnings','--socket-timeout','12','--retries','1','--extractor-retries','1']
     if shutil.which('node'): base += ['--js-runtimes','node']
-    candidates=[]
-    # Sequential searches keep extractor memory bounded; both providers can fail independently.
-    for prefix in ('ytsearch5:','scsearch5:'):
+
+    async def try_provider(prefix, hosts, source):
+        data=await run(base+['--flat-playlist','--dump-single-json','--',f'{prefix}{artist} {title}'],timeout=15)
+        entries=json.loads(data).get('entries') or []
+        candidates=[]
+        for entry in entries:
+            if not isinstance(entry,dict): continue
+            url=entry.get('webpage_url') or entry.get('url')
+            if source=='YouTube' and entry.get('id') and not allowed_url(url):
+                vid=str(entry['id'])
+                if re.fullmatch(r'[\w-]{11}',vid): url='https://www.youtube.com/watch?v='+vid
+            score=rank_candidate(artist,title,entry,duration)
+            if score >= .80 and allowed_url(url) and urlparse(url).hostname.lower() in hosts:
+                candidates.append((score,url))
+        for _,url in sorted(set(candidates),reverse=True)[:3]:
+            # Keep each download isolated and remove failed or cancelled attempts.
+            attempt=directory / str(len(list(directory.iterdir())))
+            attempt.mkdir()
+            keep=False
+            try:
+                await run(base+['-f','bestaudio[abr<=160]/bestaudio/best[height<=360]',
+                               '--max-filesize','40M','--no-part','--no-mtime',
+                               '-o',str(attempt/'audio.%(ext)s'),'--',url],timeout=30,watch_dir=attempt)
+                files=[p for p in attempt.glob('audio.*') if p.is_file() and p.suffix not in {'.part','.ytdl'}]
+                if len(files)==1 and 0 < files[0].stat().st_size <= 40*1024*1024:
+                    keep=True
+                    return ResolvedAudio(files[0],url,source)
+            except (MediaError,TimeoutError):
+                continue
+            finally:
+                if not keep: shutil.rmtree(attempt,ignore_errors=True)
+        return None
+
+    # Reserve time for the second provider even if the first search or download hangs.
+    # The caller has a 150-second deadline for resolution and subsequent rendering.
+    providers=(('ytsearch5:',{'youtube.com','www.youtube.com','music.youtube.com','youtu.be'},'YouTube'),
+               ('scsearch5:',{'soundcloud.com','www.soundcloud.com'},'SoundCloud'))
+    for prefix,hosts,source in providers:
         try:
-            data=await run(base+['--flat-playlist','--dump-single-json','--',f'{prefix}{artist} {title}'],timeout=35)
-            entries=json.loads(data).get('entries') or []
-            for entry in entries:
-                if not isinstance(entry,dict): continue
-                url=entry.get('webpage_url') or entry.get('url')
-                if prefix.startswith('yt') and entry.get('id') and not allowed_url(url):
-                    vid=str(entry['id'])
-                    if re.fullmatch(r'[\w-]{11}',vid): url='https://www.youtube.com/watch?v='+vid
-                score=rank_candidate(artist,title,entry,duration)
-                if score >= .80 and allowed_url(url): candidates.append((score,url))
+            async with asyncio.timeout(45):
+                found=await try_provider(prefix,hosts,source)
+                if found: return found
         except (MediaError,TimeoutError,ValueError):
             continue
-    for _,url in sorted(set(candidates),reverse=True)[:3]:
-        # Separate attempts avoid picking a partial file from a failed download.
-        attempt=directory / str(len(list(directory.iterdir())))
-        attempt.mkdir()
-        try:
-            await run(base+['-f','bestaudio[abr<=160]/bestaudio/best[height<=360]',
-                           '--max-filesize','40M','--no-part','--no-mtime',
-                           '-o',str(attempt/'audio.%(ext)s'),'--',url],timeout=100,watch_dir=attempt)
-            files=[p for p in attempt.glob('audio.*') if p.is_file() and p.suffix not in {'.part','.ytdl'}]
-            if len(files)==1 and 0 < files[0].stat().st_size <= 40*1024*1024:
-                return ResolvedAudio(files[0],url,'SoundCloud' if 'soundcloud.com' in urlparse(url).netloc else 'YouTube')
-        except (MediaError,TimeoutError):
-            pass
-        shutil.rmtree(attempt)
     raise MediaError('No confident downloadable match')
