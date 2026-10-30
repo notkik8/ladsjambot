@@ -20,7 +20,7 @@ from bot.canvas.groupstats import GroupStatsFrames
 from bot.canvas.process import MediaError, in_thread
 from bot.canvas.render import Segment, join_segments, render_segment
 from bot.canvas.resolver import resolve_audio
-from bot.canvas.service import CanvasBusy, CanvasService, PART_BYTES
+from bot.canvas.service import CanvasBusy, CanvasService, PART_BYTES, chunks
 from bot.database import Database
 from bot.handlers.stats import _parse_days
 from bot.lastfm import LastFMClient, TrackInfo, PLACEHOLDER_HASH
@@ -123,12 +123,13 @@ async def handle_groupstats(message: Message, groupstats_args: list[str], db: Da
                 with tempfile.TemporaryDirectory(prefix='ladsjam-groupstats-', dir=canvas_service.temp_dir) as folder:
                     root = Path(folder)
                     parts = []
+                    approximations = []
                     part_bytes = 0
                     sent_count = 0
                     part_number = 0
 
                     async def flush():
-                        nonlocal parts, part_bytes, sent_count, part_number
+                        nonlocal parts, approximations, part_bytes, sent_count, part_number
                         if not parts:
                             return
                         directory = root / f'part-{part_number:03d}'
@@ -142,10 +143,13 @@ async def handle_groupstats(message: Message, groupstats_args: list[str], db: Da
                         await message.reply_video(video=FSInputFile(output), width=720, height=720,
                                                   duration=10 * len(parts), supports_streaming=True,
                                                   request_timeout=120)
+                        for block in chunks(approximations, 3500):
+                            await message.reply('Приблизительное совпадение аудио (статистика относится к исходному треку):\n' + block,
+                                                parse_mode='HTML')
                         sent_count += len(parts)
                         output.unlink()
                         directory.rmdir()
-                        parts, part_bytes = [], 0
+                        parts, approximations, part_bytes = [], [], 0
                         part_number += 1
 
                     for i, member in enumerate(members):
@@ -196,6 +200,10 @@ async def handle_groupstats(message: Message, groupstats_args: list[str], db: Da
                                 await flush()
                             parts.append(clip)
                             part_bytes += size
+                            if getattr(audio, 'approximate', False):
+                                original = escape(f'{artist} — {track}'[:140])
+                                matched = escape(str(getattr(audio, 'matched_title', '') or 'название неизвестно')[:140])
+                                approximations.append(f'{escape(str(name)[:80])}: {original} → {matched}')
                     await flush()
                     if not sent_count:
                         await message.reply('Не удалось собрать видео: нет участников с доступным аудио за выбранный период.')

@@ -72,7 +72,7 @@ class CanvasService:
         await asyncio.gather(*tasks,return_exceptions=True)
 
     def _key(self,items,theme,solo):
-        return (3,solo,theme.key,tuple((t.tg_id,t.tg_name,t.artist,t.track) for t in items))
+        return (4,solo,theme.key,tuple((t.tg_id,t.tg_name,t.artist,t.track) for t in items))
 
     async def send(self,message,items,theme,*,solo,lastfm):
         if not items: raise MediaError('No tracks')
@@ -152,6 +152,9 @@ class CanvasService:
                         parts.append(path); previous=i; part_bytes+=path.stat().st_size
                         name=escape(item.tg_name[:32]); title=escape(f'{item.artist} — {item.track}'[:70])
                         captions.append(f'{i+1}. {name}: {title}')
+                        if getattr(audio,'approximate',False):
+                            matched=escape(str(getattr(audio,'matched_title','') or 'близкий результат')[:100])
+                            captions.append(f'≈ Аудио заменено близким результатом: {matched}')
                     except (MediaError,TimeoutError,ValueError,OSError) as exc:
                         log.warning('Canvas track %s skipped (%s)',i,type(exc).__name__)
                         (root/f'clip-{i:03d}.mp4').unlink(missing_ok=True)

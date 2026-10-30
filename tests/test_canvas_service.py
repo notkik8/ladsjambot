@@ -11,7 +11,7 @@ from bot.themes import DEFAULT
 
 
 class ServiceTests(unittest.IsolatedAsyncioTestCase):
-    async def exercise(self, count=3, missing=(), fail_upload=False):
+    async def exercise(self, count=3, missing=(), fail_upload=False, approximate=False):
         temporary=tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         root=Path(temporary.name)
@@ -27,7 +27,7 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
             index=int(title[4:])
             if index in missing: raise MediaError('not available')
             directory.mkdir(parents=True); path=directory/'song.wav'; path.touch()
-            return SimpleNamespace(path=path,source='YouTube',url=f'https://www.youtube.com/watch?v=demo{index}')
+            return SimpleNamespace(path=path,source='YouTube',url=f'https://www.youtube.com/watch?v=demo{index}',approximate=approximate,matched_title='Artist <Live>')
         def frames(items,theme):
             grids.append(len(items)); return SimpleNamespace(width=720,height=768)
         self.came=[]
@@ -59,6 +59,14 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
     async def test_all_missing_sends_no_silent_video(self):
         _,message,indices,_,_,_=await self.exercise(missing=(0,1,2))
         self.assertFalse(indices); message.reply_video.assert_not_awaited()
+
+    async def test_approximate_match_is_disclosed_and_cached(self):
+        service,message,_,_,items,lastfm=await self.exercise(count=1,approximate=True)
+        caption=message.reply_video.call_args.kwargs['caption']
+        self.assertIn('Аудио заменено',caption)
+        self.assertIn('Artist &lt;Live&gt;',caption)
+        await service.send(message,items,DEFAULT,solo=True,lastfm=lastfm)
+        self.assertEqual(message.reply_video.call_args.kwargs['caption'],caption)
 
     async def test_whole_group_shares_one_video(self):
         _,message,indices,_,_,_=await self.exercise(count=5)
