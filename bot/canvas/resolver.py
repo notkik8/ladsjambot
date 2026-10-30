@@ -62,6 +62,48 @@ def rank_candidate(artist, title, candidate, duration=None):
     return .65*similarity + .25*len(a & identity)/len(a) + .1*duration_score
 
 
+
+_TRANSLIT=dict(zip('абвгдеёзийклмнопрстуфхъыьэ',
+                   ('a','b','v','g','d','e','e','z','i','y','k','l','m','n','o','p','r','s','t','u','f','h','','y','','e')))
+_TRANSLIT.update({'ж':'zh','ц':'ts','ч':'ch','ш':'sh','щ':'shch','ю':'yu','я':'ya'})
+
+def _loose_words(value):
+    text=unicodedata.normalize('NFKC',str(value or '')).casefold()
+    return re.findall(r'[a-z0-9]+',''.join(_TRANSLIT.get(c,c) for c in text))
+
+def _word_similarity(wanted, available):
+    if not wanted or not available: return 0.
+    return sum(max(SequenceMatcher(None,w,c).ratio() for c in available) for w in wanted)/len(wanted)
+
+def rank_approximate(artist, title, candidate, duration=None):
+    """Require recognizable artist and recording identity, allowing alternative versions."""
+    if candidate.get('is_live') or candidate.get('live_status') == 'is_live': return 0.
+    nonmusic={'reaction','review','tutorial','interview','podcast','обзор','реакция','разбор','интервью','подкаст'}
+    raw=set(words(candidate.get('title')))
+    requested=set(words(title))
+    if (raw & nonmusic)-requested: return 0.
+    if {'type','beat'} <= raw and not {'type','beat'} <= requested: return 0.
+    seconds=candidate.get('duration')
+    if isinstance(seconds,(int,float)) and not 15 <= seconds <= 600: return 0.
+    artist_words=_loose_words(artist)
+    title_words=[w for w in _loose_words(without_credits(title)) if w not in NOISE and w not in VERSIONS]
+    identity=_loose_words(' '.join(str(candidate.get(k) or '') for k in ('title','artist','uploader','channel')))
+    recording=_loose_words(without_credits(candidate.get('track') or candidate.get('title')))
+    if not artist_words or not title_words: return 0.
+    artist_score=_word_similarity(artist_words,identity)
+    if artist_score < .78: return 0.
+    # Ignore artist, version and platform labels before comparing the title.
+    recording=[w for w in recording if w not in NOISE and w not in VERSIONS and
+               not any(SequenceMatcher(None,w,a).ratio() >= .85 for a in artist_words if a not in title_words)]
+    title_score=_word_similarity(title_words,recording)
+    if title_score < .78: return 0.
+    # Every significant title word must match, avoiding unrelated tracks by the same artist.
+    if any(max((SequenceMatcher(None,w,c).ratio() for c in recording),default=0) < .65 for w in title_words): return 0.
+    length_score=.5
+    if duration and duration > 0 and isinstance(seconds,(int,float)):
+        length_score=max(0.,1-abs(seconds-duration)/max(duration,1))
+    return .65*title_score+.28*artist_score+.07*length_score
+
 def allowed_url(value):
     try:
         parsed=urlparse(value)
@@ -78,6 +120,8 @@ class ResolvedAudio:
     url: str
     source: str
     preview: bool = False  # 30-second store preview: already the hook, no intro/outro to skip
+    approximate: bool = False
+    matched_title: str = ''
 
 
 PREVIEW_HOSTS=('.dzcdn.net','.apple.com','.mzstatic.com')
@@ -155,47 +199,62 @@ async def resolve_audio(artist, title, directory: Path, duration=None):
     base=[sys.executable,'-m','yt_dlp','--ignore-config','--no-playlist','--no-warnings','--socket-timeout','12','--retries','1','--extractor-retries','1']
     if shutil.which('node'): base += ['--js-runtimes','node']
 
+    approximate=[]
+
+    async def download(url, source, matched_title='', is_approximate=False):
+        attempt=directory / str(len(list(directory.iterdir())))
+        attempt.mkdir()
+        keep=False
+        try:
+            await run(base+['-f','bestaudio[abr<=160]/bestaudio/best[height<=360]',
+                           '--max-filesize','40M','--no-part','--no-mtime',
+                           '-o',str(attempt/'audio.%(ext)s'),'--',url],timeout=20,watch_dir=attempt)
+            files=[p for p in attempt.glob('audio.*') if p.is_file() and p.suffix not in {'.part','.ytdl'}]
+            if len(files)==1 and 0 < files[0].stat().st_size <= 40*1024*1024:
+                keep=True
+                return ResolvedAudio(files[0],url,source,approximate=is_approximate,matched_title=matched_title)
+        except (MediaError,TimeoutError):
+            pass
+        finally:
+            if not keep: shutil.rmtree(attempt,ignore_errors=True)
+        return None
+
     async def try_provider(prefix, hosts, source):
-        data=await run(base+['--flat-playlist','--dump-single-json','--',f'{prefix}{artist} {title}'],timeout=15)
+        data=await run(base+['--flat-playlist','--dump-single-json','--',f'{prefix}{artist} {title}'],timeout=12)
         entries=json.loads(data).get('entries') or []
-        candidates=[]
+        exact=[]
         for entry in entries:
             if not isinstance(entry,dict): continue
             url=entry.get('webpage_url') or entry.get('url')
             if source=='YouTube' and entry.get('id') and not allowed_url(url):
                 vid=str(entry['id'])
                 if re.fullmatch(r'[\w-]{11}',vid): url='https://www.youtube.com/watch?v='+vid
+            if not allowed_url(url) or urlparse(url).hostname.lower() not in hosts: continue
+            name=str(entry.get('title') or entry.get('track') or '')
             score=rank_candidate(artist,title,entry,duration)
-            if score >= .80 and allowed_url(url) and urlparse(url).hostname.lower() in hosts:
-                candidates.append((score,url))
-        for _,url in sorted(set(candidates),reverse=True)[:3]:
-            # Keep each download isolated and remove failed or cancelled attempts.
-            attempt=directory / str(len(list(directory.iterdir())))
-            attempt.mkdir()
-            keep=False
-            try:
-                await run(base+['-f','bestaudio[abr<=160]/bestaudio/best[height<=360]',
-                               '--max-filesize','40M','--no-part','--no-mtime',
-                               '-o',str(attempt/'audio.%(ext)s'),'--',url],timeout=30,watch_dir=attempt)
-                files=[p for p in attempt.glob('audio.*') if p.is_file() and p.suffix not in {'.part','.ytdl'}]
-                if len(files)==1 and 0 < files[0].stat().st_size <= 40*1024*1024:
-                    keep=True
-                    return ResolvedAudio(files[0],url,source)
-            except (MediaError,TimeoutError):
-                continue
-            finally:
-                if not keep: shutil.rmtree(attempt,ignore_errors=True)
+            if score >= .80: exact.append((score,url,name))
+            else:
+                score=rank_approximate(artist,title,entry,duration)
+                if score >= .78: approximate.append((score,url,source,name))
+        for _,url,name in sorted(set(exact),reverse=True)[:3]:
+            result=await download(url,source,name)
+            if result: return result
         return None
 
-    # Reserve time for the second provider even if the first search or download hangs.
-    # The caller has a 150-second deadline for resolution and subsequent rendering.
     providers=(('ytsearch5:',{'youtube.com','www.youtube.com','music.youtube.com','youtu.be'},'YouTube'),
                ('scsearch5:',{'soundcloud.com','www.soundcloud.com'},'SoundCloud'))
     for prefix,hosts,source in providers:
         try:
-            async with asyncio.timeout(45):
+            async with asyncio.timeout(30):
                 found=await try_provider(prefix,hosts,source)
                 if found: return found
         except (MediaError,TimeoutError,ValueError):
             continue
+    try:
+        async with asyncio.timeout(30):
+            for _,url,source,name in sorted(set(approximate),reverse=True)[:3]:
+                found=await download(url,source,name,True)
+                if found: return found
+    except TimeoutError:
+        pass
     raise MediaError('No confident downloadable match')

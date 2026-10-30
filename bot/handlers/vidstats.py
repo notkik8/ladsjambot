@@ -4,6 +4,7 @@ import logging
 import re
 import shutil
 import tempfile
+from html import escape
 from pathlib import Path
 
 from aiogram.filters import Filter
@@ -14,7 +15,7 @@ from bot.canvas.analysis import analyse_audio
 from bot.canvas.process import MediaError, in_thread, run
 from bot.canvas.render import join_segments
 from bot.canvas.resolver import resolve_audio
-from bot.canvas.service import CanvasBusy, CanvasService, track_seconds
+from bot.canvas.service import CanvasBusy, CanvasService, chunks, track_seconds
 from bot.database import Database
 from bot.handlers.stats import API_ERROR, _hero_covers, _parse_days, _self_user, router
 from bot.infographic import render_stats
@@ -63,7 +64,7 @@ async def cmd_vidstats(message: Message, vidstats_args: list[str], db: Database,
                     root = Path(folder)
                     clips = root / 'clips'
                     clips.mkdir()
-                    parts, skipped = [], []
+                    parts, skipped, approximations = [], [], []
                     for i, (track, artist, _count) in enumerate(data.top_tracks):
                         directory = root / f'audio-{i:03d}'
                         directory.mkdir()
@@ -90,6 +91,10 @@ async def cmd_vidstats(message: Message, vidstats_args: list[str], db: Database,
                                            '-af', 'atrim=duration=7,asetpts=PTS-STARTPTS,apad,atrim=duration=7,loudnorm=I=-16:TP=-1.5:LRA=11,afade=t=in:d=0.04,afade=t=out:st=6.92:d=0.08',
                                            '-movflags', '+faststart', clip], timeout=140, watch_dir=clips)
                             parts.append(clip)
+                            if getattr(audio, 'approximate', False):
+                                original = escape(f'{artist} — {track}'[:140])
+                                matched = escape(str(getattr(audio, 'matched_title', '') or 'название неизвестно')[:140])
+                                approximations.append(f'{i + 1}. {original} → {matched}')
                         except (MediaError, TimeoutError, ValueError, OSError) as exc:
                             log.warning('Vidstats track %s skipped (%s)', i + 1, type(exc).__name__)
                             clip.unlink(missing_ok=True)
@@ -101,6 +106,9 @@ async def cmd_vidstats(message: Message, vidstats_args: list[str], db: Database,
                     output = await join_segments(parts, clips, canvas_service.ffmpeg)
                     await message.reply_video(video=FSInputFile(output), duration=7 * len(parts),
                                               supports_streaming=True, request_timeout=120)
+                    for block in chunks(approximations, 3500):
+                        await message.reply('Приблизительное совпадение аудио (статистика относится к исходному треку):\n' + block,
+                                            parse_mode='HTML')
                     if skipped:
                         await message.reply('Аудио не найдено для строк: ' + ', '.join(map(str, skipped)) + '.')
     except CanvasBusy:
