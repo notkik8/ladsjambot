@@ -239,3 +239,7 @@ python3 main.py
 ## 🔒 Безопасность
 
 Файл `.env` и локальные базы данных `*.db` включены в `.gitignore` и **никогда не попадают в репозиторий**. Ваши секретные токены защищены.
+
+### Groupstats animation
+
+Groupstats uses the approved dark poster design: avatar-derived reactive glow, a vertical card flip, gentle cover zoom and sparse audio-onset pulses, large track titles, play-count reveal, participant numbering and a scene progress bar. The next prepared participant enters while the current card exits. Audio remains sequential, ten seconds per participant. Prepared media is capped at 256 MiB on disk and removed after rendering; only the current and next scenes are retained in memory. Missing audio and resource-limit skips are reported.

@@ -6,10 +6,12 @@ import re
 import shutil
 import tempfile
 from html import escape
+from functools import partial
 from pathlib import Path
 from urllib.parse import urlparse
 
 import aiohttp
+import numpy as np
 from aiogram import Router
 from aiogram.filters import Filter
 from aiogram.types import FSInputFile, Message
@@ -23,13 +25,14 @@ from bot.canvas.resolver import resolve_audio
 from bot.canvas.service import CanvasBusy, CanvasService, PART_BYTES, chunks
 from bot.database import Database
 from bot.handlers.stats import _parse_days
-from bot.lastfm import LastFMClient, TrackInfo, PLACEHOLDER_HASH
+from bot.lastfm import LastFMClient, PLACEHOLDER_HASH
 from bot.themes import for_chat
 
 router = Router(name='groupstats_router')
 log = logging.getLogger(__name__)
 MAX_IMAGE = 5 * 1024 * 1024
 MAX_MEMBERS = 64
+MAX_PREPARED_BYTES = 256 * 1024 * 1024
 
 
 class LimitedBuffer(io.BytesIO):
@@ -152,12 +155,13 @@ async def handle_groupstats(message: Message, groupstats_args: list[str], db: Da
                         parts, approximations, part_bytes = [], [], 0
                         part_number += 1
 
+                    # Keep prepared media on disk until its turn to render.
+                    prepared = []
+                    prepared_bytes = 0
                     for i, member in enumerate(members):
                         name = member['tg_name']
                         directory = root / f'member-{i:03d}'
                         directory.mkdir()
-                        clip = root / f'clip-{i:03d}.mp4'
-                        size = None
                         try:
                             async with asyncio.timeout(150):
                                 scrobbles, truncated = await st.fetch_scrobbles(lastfm, member['lastfm_user'], since)
@@ -172,7 +176,6 @@ async def handle_groupstats(message: Message, groupstats_args: list[str], db: Da
                                     continue
                                 stats = st.build_stats(name, days, scrobbles)
                                 track, artist, plays = stats.top_tracks[0]
-                                item = TrackInfo(member['tg_id'], name, member['lastfm_user'], artist, track)
                                 info = await lastfm.call('track.getInfo', retries=0, artist=artist, track=track)
                                 try:
                                     duration = float((info or {}).get('track', {}).get('duration', 0)) / 1000 or None
@@ -182,17 +185,70 @@ async def handle_groupstats(message: Message, groupstats_args: list[str], db: Da
                                 audio = await resolve_audio(artist, track, directory / 'download', duration)
                                 start, pcm = await analyse_audio(audio.path, directory, canvas_service.analyser,
                                                                  canvas_service.ffmpeg, 10, preview=getattr(audio, 'preview', False))
-                            frames = await in_thread(GroupStatsFrames, name, artist, track, plays, avatar_bytes, cover_bytes, theme)
+                            np.save(directory / 'excerpt.npy', pcm, allow_pickle=False)
+                            del pcm
+                            if avatar_bytes:
+                                (directory / 'avatar').write_bytes(avatar_bytes)
+                            if cover_bytes:
+                                (directory / 'cover').write_bytes(cover_bytes)
+                            member_bytes = sum(path.stat().st_size for path in directory.rglob('*') if path.is_file())
+                            if prepared_bytes + member_bytes > MAX_PREPARED_BYTES:
+                                skipped.append((name, 'превышен лимит места для подготовки видео'))
+                                continue
+                            prepared_bytes += member_bytes
+                            prepared.append((i, name, artist, track, plays, audio, start, directory))
+                        except (MediaError, TimeoutError, ValueError, OSError) as exc:
+                            log.warning('Groupstats member %s skipped (%s)', i, type(exc).__name__)
+                            skipped.append((name, 'аудио недоступно или обработка не завершилась'))
+                        finally:
+                            if not prepared or prepared[-1][0] != i:
+                                shutil.rmtree(directory, ignore_errors=True)
+
+                    async def make_scene(entry, position):
+                        _, name, artist, track, plays, audio, start, directory = entry
+                        avatar_path, cover_path = directory / 'avatar', directory / 'cover'
+                        frames = await in_thread(partial(GroupStatsFrames, name, artist, track, plays,
+                                                 avatar_path.read_bytes() if avatar_path.exists() else None,
+                                                 cover_path.read_bytes() if cover_path.exists() else None,
+                                                 theme, days=days, position=position, total=len(prepared)))
+                        pcm = np.load(directory / 'excerpt.npy', allow_pickle=False)
+                        await in_thread(frames.prepare_audio, pcm)
+                        return frames, pcm
+
+                    current = None
+                    for index, entry in enumerate(prepared):
+                        i, name, artist, track, plays, audio, start, directory = entry
+                        clip = root / f'clip-{i:03d}.mp4'
+                        size = None
+                        try:
+                            if current is None:
+                                current = await make_scene(entry, index + 1)
+                            frames, pcm = current
+                            next_scene = None
+                            while index + 1 < len(prepared):
+                                try:
+                                    next_scene = await make_scene(prepared[index + 1], index + 2)
+                                    break
+                                except (MediaError, TimeoutError, ValueError, OSError) as exc:
+                                    failed = prepared.pop(index + 1)
+                                    log.warning('Groupstats member %s skipped (%s)', failed[0], type(exc).__name__)
+                                    skipped.append((failed[1], 'аудио недоступно или обработка не завершилась'))
+                                    shutil.rmtree(failed[-1], ignore_errors=True)
+                            frames.total = len(prepared)
+                            if next_scene:
+                                frames.next_frame = next_scene[0]
+                                next_scene[0].entered = True
                             await render_segment(frames, Segment(0, audio.path, start, 10, pcm), clip, canvas_service.ffmpeg)
-                            del pcm, frames
                             size = clip.stat().st_size
                             if size > PART_BYTES:
                                 raise MediaError('Single clip exceeds upload budget')
+                            current = next_scene
                         except (MediaError, TimeoutError, ValueError, OSError) as exc:
                             log.warning('Groupstats member %s skipped (%s)', i, type(exc).__name__)
                             clip.unlink(missing_ok=True)
                             size = None
                             skipped.append((name, 'аудио недоступно или обработка не завершилась'))
+                            current = None
                         finally:
                             shutil.rmtree(directory, ignore_errors=True)
                         if size is not None:
