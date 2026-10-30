@@ -14,6 +14,7 @@ from bot.lastfm import LastFMClient
 from bot.middlewares import GroupMemberTrackerMiddleware
 from bot.canvas.service import CanvasService
 from bot.handlers.canvas import router as canvas_router
+from bot.handlers.groupstats import router as groupstats_router
 import bot.handlers.vidstats  # registers the video command on stats_router
 
 logging.basicConfig(
@@ -68,6 +69,7 @@ async def main() -> None:
 
     # Register Routers
     dp.include_router(canvas_router)
+    dp.include_router(groupstats_router)
     dp.include_router(stats_router)
     dp.include_router(themes_router)
     dp.include_router(private_router)
@@ -80,6 +82,7 @@ async def main() -> None:
                 BotCommand(command="canvas", description="15 секунд моего текущего трека"),
                 BotCommand(command="npcanvas", description="Канвас группы: по 6 секунд на трек"),
                 BotCommand(command="npc", description="Короткая команда группового канваса"),
+                BotCommand(command="groupstats", description="Топ треков участников группы"),
                 BotCommand(command="stats", description="Моя статистика за N дней"),
                 BotCommand(command="vidstats", description="Видео статистики с топом треков"),
                 BotCommand(command="top", description="Мои топы: альбомы/артисты/треки"),

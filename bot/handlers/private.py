@@ -142,6 +142,7 @@ async def cmd_help(message: Message) -> None:
         "• <code>/themes</code> — стиль оформления картинок (в группе — только админы)\n\n"
         "<b>В групповом чате:</b>\n"
         "• <code>/npcanvas</code>, <code>/npc</code>, <code>npcanvas</code> или <code>npc</code> — по 6 секунд каждого трека, последовательно\n"
+        "• <code>/groupstats [дней]</code> или <code>groupstats [дней]</code> — топ треков участников группы (по умолчанию 7, макс. 30)\n"
         "• <code>/leaders [дней]</code> — лидеры группы по количеству прослушиваний\n"
         "• <code>/whoknows [артист]</code> — кто в группе слушает артиста больше всех\n"
         "• <code>/join</code> или <code>join</code> — подтвердить участие в группе\n"
